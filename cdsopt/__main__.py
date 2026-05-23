@@ -1,4 +1,4 @@
-from rnaopt.main import app
+from cdsopt.main import app
 
 if __name__ == "__main__":
     app()

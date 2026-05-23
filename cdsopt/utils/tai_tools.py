@@ -3,7 +3,7 @@ from codonbias.scores import TrnaAdaptationIndex
 try:
     from tables.tgcn import get_tgcn
 except ImportError:
-    from rnaopt.tables.tgcn import get_tgcn
+    from cdsopt.tables.tgcn import get_tgcn
 
 
 def calc_tai(rna_seq: str, genetic_code: int = 1, species: str = "human", tGCN=None, genome_id: str = None, domain: str = None):

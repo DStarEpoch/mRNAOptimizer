@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from cai2 import CAI
-from rnaopt.tables.codon_frequency_table import get_table_weights
-from rnaopt.tables.genetic_code import get_code_map_by_genetic_code
+from cdsopt.tables.codon_frequency_table import get_table_weights
+from cdsopt.tables.genetic_code import get_code_map_by_genetic_code
 
 def calc_cai(rna_seq: str, species: str = "human", genetic_code: int = 1) -> float:
     """
