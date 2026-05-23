@@ -21,6 +21,12 @@ dependencies = [
     "codon-bias==0.5.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+]
+
 [project.scripts]
 cdsopt = "cdsopt.main:app"
 
