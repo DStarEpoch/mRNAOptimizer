@@ -6,7 +6,7 @@ import logging
 import shutil
 from dataclasses import dataclass
 from multiprocessing import Pool
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from cdsopt.fitness.cache import FitnessCache
 from cdsopt.genetic_alg.nsga2 import Objective
@@ -21,22 +21,19 @@ logger = logging.getLogger(__name__)
 class FitnessConfig:
     species: str = "human"
     genetic_code: int = 1
-    enable_cai: bool = True
-    enable_tai: bool = False
-    enable_cg: bool = True
-    enable_fold: bool = True
-    enable_cpb: bool = False
+    # CAI and avg_MFE are always enabled (target must be set)
     target_cai: float = 0.9
     cai_tolerance: float = 0.001
-    target_tai: float = 0.9
-    tai_tolerance: float = 0.001
     target_avg_mfe: float = -0.4
     avg_mfe_tolerance: float = 0.05
-    target_cg_content: float = 0.6
+    # Others are enabled only when target is not None
+    target_tai: Optional[float] = None
+    tai_tolerance: float = 0.001
+    target_cg_content: Optional[float] = None
     cg_content_tolerance: float = 0.005
-    target_aup: float = 0.4
+    target_aup: Optional[float] = None
     aup_tolerance: float = 0.01
-    target_cpb: float = 0.5
+    target_cpb: Optional[float] = None
     cpb_tolerance: float = 0.01
     fold_engine: str = "auto"
     cache_maxsize: int = 100_000
@@ -44,17 +41,18 @@ class FitnessConfig:
 
 def build_objectives(cfg: FitnessConfig) -> List[Objective]:
     objs: List[Objective] = []
-    if cfg.enable_cai:
-        objs.append(Objective("CAI", target=cfg.target_cai, tolerance=cfg.cai_tolerance, direction="maximize"))
-    if cfg.enable_tai:
-        objs.append(Objective("tAI", target=cfg.target_tai, tolerance=cfg.tai_tolerance, direction="maximize"))
-    if cfg.enable_cg:
+    # CAI is always enabled
+    objs.append(Objective("CAI", target=cfg.target_cai, tolerance=cfg.cai_tolerance))
+    # avg_MFE is always enabled
+    objs.append(Objective("avg_MFE", target=cfg.target_avg_mfe, tolerance=cfg.avg_mfe_tolerance))
+    if cfg.target_tai is not None:
+        objs.append(Objective("tAI", target=cfg.target_tai, tolerance=cfg.tai_tolerance))
+    if cfg.target_cg_content is not None:
         objs.append(Objective("CG_content", target=cfg.target_cg_content, tolerance=cfg.cg_content_tolerance))
-    if cfg.enable_fold:
-        objs.append(Objective("avg_MFE", target=cfg.target_avg_mfe, tolerance=cfg.avg_mfe_tolerance))
+    if cfg.target_aup is not None:
         objs.append(Objective("AUP", target=cfg.target_aup, tolerance=cfg.aup_tolerance))
-    if cfg.enable_cpb:
-        objs.append(Objective("CPB", target=cfg.target_cpb, tolerance=cfg.cpb_tolerance, direction="maximize"))
+    if cfg.target_cpb is not None:
+        objs.append(Objective("CPB", target=cfg.target_cpb, tolerance=cfg.cpb_tolerance))
     return objs
 
 
@@ -80,12 +78,15 @@ class FitnessEvaluator:
         logger.debug("FitnessEvaluator ready (species=%s, engine=%s, objectives=%s)", self.cfg.species, self._resolved_fold_engine, self._active_objectives())
 
     def _active_objectives(self) -> List[str]:
-        objs = []
-        if self.cfg.enable_cai: objs.append("CAI")
-        if self.cfg.enable_tai: objs.append("tAI")
-        if self.cfg.enable_cg: objs.append("CG")
-        if self.cfg.enable_fold: objs.extend(["avg_MFE", "AUP"])
-        if self.cfg.enable_cpb: objs.append("CPB")
+        objs = ["CAI", "avg_MFE"]
+        if self.cfg.target_tai is not None:
+            objs.append("tAI")
+        if self.cfg.target_cg_content is not None:
+            objs.append("CG_content")
+        if self.cfg.target_aup is not None:
+            objs.append("AUP")
+        if self.cfg.target_cpb is not None:
+            objs.append("CPB")
         return objs
 
     def evaluate(self, rna_seq: str) -> dict:
@@ -96,21 +97,29 @@ class FitnessEvaluator:
         result: dict = {"rna_seq": rna_seq}
         _run = lambda fn, key, default: self._try_evaluate(fn, key, default, result, rna_seq)
 
-        if self.cfg.enable_cai:
-            _run(lambda: float(_calc_cai(rna_seq, weights=self._cai_weights)), "CAI", 0.0)
-        if self.cfg.enable_tai:
+        # CAI is always evaluated
+        _run(lambda: float(_calc_cai(rna_seq, weights=self._cai_weights)), "CAI", 0.0)
+        # tAI
+        if self.cfg.target_tai is not None:
             _run(lambda: float(_calc_tai(rna_seq, genetic_code=self.cfg.genetic_code, species=self.cfg.species)), "tAI", 0.0)
-        if self.cfg.enable_cg:
+        # CG
+        if self.cfg.target_cg_content is not None:
             _run(lambda: float(_count_cg(rna_seq)), "CG_content", 0.0)
-        if self.cfg.enable_fold:
-            def _fold():
-                fd = _estimate_fold(rna_seq, engine=self._resolved_fold_engine)
-                result["MFE"] = float(fd["mfe"])
-                result["avg_MFE"] = result["MFE"] / len(rna_seq) if len(rna_seq) > 0 else 0.0
+        # Fold (avg_MFE always; AUP only if target is set)
+        need_aup = self.cfg.target_aup is not None
+        def _fold():
+            fd = _estimate_fold(rna_seq, engine=self._resolved_fold_engine, need_aup=need_aup)
+            result["MFE"] = float(fd["mfe"])
+            result["avg_MFE"] = result["MFE"] / len(rna_seq) if len(rna_seq) > 0 else 0.0
+            result["structure"] = fd["structure"]
+            if need_aup:
                 result["AUP"] = float(fd["aup"])
-                result["structure"] = fd["structure"]
-            self._try_evaluate(_fold, "fold", None, result, rna_seq, on_fail=lambda: result.update({"MFE": 0.0, "avg_MFE": 0.0, "AUP": 0.0, "structure": "." * len(rna_seq)}))
-        if self.cfg.enable_cpb:
+        fail_vals = {"MFE": 0.0, "avg_MFE": 0.0, "structure": "." * len(rna_seq)}
+        if need_aup:
+            fail_vals["AUP"] = 0.0
+        self._try_evaluate(_fold, "fold", None, result, rna_seq, on_fail=lambda: result.update(fail_vals))
+        # CPB
+        if self.cfg.target_cpb is not None:
             _run(lambda: float(_calc_cpb(rna_seq, species=self.cfg.species, genetic_code=self.cfg.genetic_code)), "CPB", 0.0)
 
         self.cache.set(rna_seq, result)
@@ -140,7 +149,13 @@ class FitnessEvaluator:
                 to_eval.append(seq)
         if not to_eval:
             return results
-        cfg_dict = {k: getattr(self.cfg, k) for k in ("species", "genetic_code", "enable_cai", "enable_tai", "enable_cg", "enable_fold", "enable_cpb", "fold_engine")}
+        cfg_dict = {k: getattr(self.cfg, k) for k in (
+            "species", "genetic_code",
+            "target_cai", "cai_tolerance", "target_avg_mfe", "avg_mfe_tolerance",
+            "target_tai", "tai_tolerance", "target_cg_content", "cg_content_tolerance",
+            "target_aup", "aup_tolerance", "target_cpb", "cpb_tolerance",
+            "fold_engine",
+        )}
         with Pool(processes=processes) as pool:
             mapped = pool.map(_eval_worker, [(seq, cfg_dict) for seq in to_eval])
         for seq, fit in mapped:

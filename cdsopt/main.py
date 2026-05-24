@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 import click
 
-from cdsopt.fitness.evaluator import FitnessConfig
+from cdsopt.fitness.evaluator import FitnessConfig, FitnessEvaluator
 from cdsopt.genetic_alg.processor import GAConfig, GeneticAlgorithmProcessor
 from cdsopt.io_utils import read_protein_sequence, read_cds_sequences, write_results
 
@@ -30,16 +30,15 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
 
 _PARAM_DEFAULTS = {
     "species": "human", "pop_size": 100, "generations": 1000, "processes": 1,
-    "seed": None, "output_dir": "./outputs", "enable_tai": False, "enable_cpb": False,
-    "fold_engine": "auto", "amplification": 3, "mute_rate": 0.01, "n_elite": 2,
+    "seed": None, "output_dir": "./outputs",
+    "fold_engine": "auto", "amplification": 3, "mute_rate": 0.05, "n_elite": 10,
     "early_stop_patience": 50, "not_mutate_idx": "",
-    "target_cai": 0.9, "tolerance_cai": 0.001,
-    "target_tai": 0.9, "tolerance_tai": 0.001,
-    "target_cg": 0.6, "tolerance_cg": 0.005,
+    "target_cai": 0.9, "tolerance_cai": 0.02,
+    "target_tai": None, "tolerance_tai": 0.03,
+    "target_cg": None, "tolerance_cg": 0.005,
     "target_avg_mfe": -0.4, "tolerance_avg_mfe": 0.05,
-    "target_aup": 0.4, "tolerance_aup": 0.01,
-    "target_cpb": 0.5, "tolerance_cpb": 0.01,
-    "weighted_init": True,
+    "target_aup": None, "tolerance_aup": 0.05,
+    "target_cpb": None, "tolerance_cpb": 0.01,
 }
 
 
@@ -66,22 +65,27 @@ def _validate_init_cds(path: Path | None, protein: str, genetic_code: int) -> li
 
 
 def _build_fitness_config(yaml_cfg: dict, **p) -> FitnessConfig:
+    # Resolve targets: CLI > YAML > default (None means disabled)
+    def _resolve_target(key, default):
+        val = p.get(key, default)
+        if val is not None:
+            return val
+        return yaml_cfg.get(key, default)
+
     return FitnessConfig(
         species=p["species"],
         fold_engine=p["fold_engine"],
-        enable_tai=p["enable_tai"],
-        enable_cpb=p["enable_cpb"],
         target_cai=p["target_cai"],
         cai_tolerance=p["tolerance_cai"],
-        target_tai=p["target_tai"],
+        target_tai=_resolve_target("target_tai", None),
         tai_tolerance=p["tolerance_tai"],
         target_avg_mfe=p["target_avg_mfe"],
         avg_mfe_tolerance=p["tolerance_avg_mfe"],
-        target_aup=p["target_aup"],
+        target_aup=_resolve_target("target_aup", None),
         aup_tolerance=p["tolerance_aup"],
-        target_cpb=p["target_cpb"],
+        target_cpb=_resolve_target("target_cpb", None),
         cpb_tolerance=p["tolerance_cpb"],
-        target_cg_content=p["target_cg"],
+        target_cg_content=_resolve_target("target_cg", None),
         cg_content_tolerance=p["tolerance_cg"],
     )
 
@@ -104,8 +108,6 @@ def app(ctx: click.Context, verbose: bool) -> None:
 @click.option("-p", "--processes", default=1, show_default=True, help="Parallel processes")
 @click.option("--seed", type=int, default=None, help="Random seed")
 @click.option("-o", "--output-dir", default="./outputs", show_default=True, help="Output directory")
-@click.option("--enable-tai", is_flag=True, help="Enable tAI objective")
-@click.option("--enable-cpb", is_flag=True, help="Enable codon pair bias objective")
 @click.option("--fold-engine", default="auto", show_default=True, help="RNA folding engine: auto, vienna, or linearfold")
 @click.option("--amplification", default=3, show_default=True, help="Offspring amplification factor (offspring = pop_size * amplification)")
 @click.option("--mute-rate", default=0.05, show_default=True)
@@ -113,16 +115,16 @@ def app(ctx: click.Context, verbose: bool) -> None:
 @click.option("--early-stop-patience", default=50, show_default=True)
 @click.option("--not-mutate-idx", default="", help="Comma-separated 0-based indices that should not mutate")
 @click.option("--target-cai", type=float, default=0.9, show_default=True)
-@click.option("--target-cg", type=float, default=0.6, show_default=True)
+@click.option("--target-cg", type=float, default=None, show_default=True)
 @click.option("--target-avg-mfe", type=float, default=-0.4, show_default=True)
-@click.option("--target-aup", type=float, default=0.3, show_default=True)
-@click.option("--target-tai", type=float, default=0.9, show_default=True)
-@click.option("--target-cpb", type=float, default=0.5, show_default=True)
-@click.option("--tolerance-cai", type=float, default=0.01, show_default=True)
+@click.option("--target-aup", type=float, default=None, show_default=True)
+@click.option("--target-tai", type=float, default=None, show_default=True)
+@click.option("--target-cpb", type=float, default=None, show_default=True)
+@click.option("--tolerance-cai", type=float, default=0.02, show_default=True)
 @click.option("--tolerance-cg", type=float, default=0.005, show_default=True)
-@click.option("--tolerance-avg-mfe", type=float, default=0.01, show_default=True)
+@click.option("--tolerance-avg-mfe", type=float, default=0.05, show_default=True)
 @click.option("--tolerance-aup", type=float, default=0.05, show_default=True)
-@click.option("--tolerance-tai", type=float, default=0.01, show_default=True)
+@click.option("--tolerance-tai", type=float, default=0.03, show_default=True)
 @click.option("--tolerance-cpb", type=float, default=0.01, show_default=True)
 @click.option("--init-cds", type=click.Path(exists=True, path_type=Path), default=None, help="FASTA file with initial CDS sequences")
 @click.option("--weighted-init", is_flag=True, help="Generate random initial population weighted by species CAI")
@@ -132,11 +134,14 @@ def optimize(**kwargs) -> None:
     INPUT_PROTEIN_SEQ: Protein sequence file (FASTA or plain text).
     """
     yaml_cfg = _load_yaml(kwargs["config"]) if kwargs.get("config") else {}
+    ctx = click.get_current_context()
 
-    # Resolve parameters: CLI > YAML > default
+    # Resolve parameters: CLI explicit > YAML > default
     def _resolve(key: str, default: Any) -> Any:
-        val = kwargs[key]
-        return val if val != default else yaml_cfg.get(key, default)
+        source = ctx.get_parameter_source(key)
+        if source == click.core.ParameterSource.COMMANDLINE:
+            return kwargs[key]
+        return yaml_cfg.get(key, default)
 
     protein = read_protein_sequence(kwargs["input_protein_seq"])
     logger.info("Loaded protein sequence: %d residues", len(protein))
@@ -190,8 +195,59 @@ def resume(checkpoint: Path, processes: int | None, output_dir: Path | None) -> 
     logger.info("Optimization complete. Results written to %s", out)
 
 
+@click.command()
+@click.argument("cds", type=click.Path(exists=True, path_type=Path))
+@click.option("-s", "--species", default="human", help="Host species for codon usage", show_default=True)
+@click.option("--fold-engine", default="auto", show_default=True)
+@click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file (CSV); default: stdout")
+def report(cds: Path, species: str, fold_engine: str, output: Path | None) -> None:
+    """Evaluate all fitness parameters for given CDS sequences fasta file."""
+    fitness_config = FitnessConfig(
+        species=species,
+        fold_engine=fold_engine,
+        target_cai=0.0,
+        target_avg_mfe=0.0,
+        target_tai=0.0,
+        target_cg_content=0.0,
+        target_aup=0.0,
+        target_cpb=0.0,
+    )
+    evaluator = FitnessEvaluator(config=fitness_config)
+
+    from Bio import SeqIO
+    records = list(SeqIO.parse(cds, "fasta"))
+    logger.info("Loaded %d CDS sequences from %s", len(records), cds)
+
+    rows = []
+    for record in records:
+        seq = str(record.seq).upper().replace("T", "U")
+        fit = evaluator.evaluate(seq)
+        rows.append({
+            "id": record.id,
+            "length": len(seq),
+            "CAI": fit.get("CAI", ""),
+            "tAI": fit.get("tAI", ""),
+            "CG_content": fit.get("CG_content", ""),
+            "MFE": fit.get("MFE", ""),
+            "avg_MFE": fit.get("avg_MFE", ""),
+            "AUP": fit.get("AUP", ""),
+            "CPB": fit.get("CPB", ""),
+        })
+
+    import csv, sys
+    fieldnames = ["id", "length", "CAI", "tAI", "CG_content", "MFE", "avg_MFE", "AUP", "CPB"]
+    fobj = open(output, "w", newline="", encoding="utf-8") if output else sys.stdout
+    writer = csv.DictWriter(fobj, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+    if output:
+        fobj.close()
+        logger.info("Report written to %s", output)
+
+
 app.add_command(optimize)
 app.add_command(resume)
+app.add_command(report)
 
 if __name__ == "__main__":
     app()

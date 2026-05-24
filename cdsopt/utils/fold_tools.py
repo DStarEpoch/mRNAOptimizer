@@ -13,12 +13,15 @@ import subprocess
 from ViennaRNA import RNA
 
 
-def _fold_vienna(sequence: str) -> dict:
+def _fold_vienna(sequence: str, need_aup: bool = True) -> dict:
     """Fold with ViennaRNA; AUP from partition-function pairing probs."""
     fc = RNA.fold_compound(sequence)
     ss, mfe = fc.mfe()
-    fc.pf()
-    aup = _compute_aup_vienna(fc, len(sequence))
+    if need_aup:
+        fc.pf()
+        aup = _compute_aup_vienna(fc, len(sequence))
+    else:
+        aup = 0.0
     return {"mfe": mfe, "structure": ss, "aup": aup}
 
 
@@ -47,7 +50,7 @@ def _compute_aup_vienna(fc, seq_len: int) -> float:
     return max(0.0, min(1.0, aup))
 
 
-def _fold_linearfold(sequence: str) -> dict:
+def _fold_linearfold(sequence: str, need_aup: bool = True) -> dict:
     """Fold with LinearFold CLI; AUP from dot-counting."""
     executable = shutil.which("linearfold")
     if executable is None:
@@ -86,28 +89,29 @@ def _fold_linearfold(sequence: str) -> dict:
     except ValueError:
         raise RuntimeError(f"Cannot parse MFE from {mfe_str!r}")
 
-    aup = structure.count(".") / len(structure) if len(structure) > 0 else 0.0
+    aup = structure.count(".") / len(structure) if need_aup and len(structure) > 0 else 0.0
     return {"mfe": mfe, "structure": structure, "aup": aup}
 
 
-def estimate_fold(sequence: str, engine: str = "auto") -> dict:
+def estimate_fold(sequence: str, engine: str = "auto", need_aup: bool = True) -> dict:
     """
     Estimate the secondary structure of an RNA sequence.
 
     :param sequence: RNA sequence to fold.
     :param engine: 'auto', 'vienna', or 'linearfold'.
                    Auto prefers linearfold if available, else ViennaRNA.
+    :param need_aup: Whether to compute AUP (skip if not needed to save time).
     :return: dict with keys 'mfe', 'structure', 'aup'.
     """
     if engine == "linearfold":
         if not shutil.which("linearfold"):
             raise FileNotFoundError("linearfold not found in PATH")
-        return _fold_linearfold(sequence)
+        return _fold_linearfold(sequence, need_aup=need_aup)
 
     if engine == "vienna":
-        return _fold_vienna(sequence)
+        return _fold_vienna(sequence, need_aup=need_aup)
 
     # auto-detect
     if shutil.which("linearfold"):
-        return _fold_linearfold(sequence)
-    return _fold_vienna(sequence)
+        return _fold_linearfold(sequence, need_aup=need_aup)
+    return _fold_vienna(sequence, need_aup=need_aup)

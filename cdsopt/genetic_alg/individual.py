@@ -7,8 +7,9 @@ into the list of synonymous codons for residue i of the protein sequence.
 """
 from __future__ import annotations
 
+import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from cdsopt.tables.genetic_code import get_code_map_by_genetic_code
@@ -22,10 +23,12 @@ class ProteinSpec:
     codon_choices: List[List[str]]  # RNA codons (U-based)
     genetic_code: int = 1
     cai_weights: Optional[List[List[float]]] = None  # normalized weights per position
+    total_variants: int = field(init=False)
 
     def __post_init__(self):
         assert len(self.protein_sequence) == len(self.codon_choices), \
             "Protein length must match codon choices length"
+        object.__setattr__(self, 'total_variants', math.prod(len(c) for c in self.codon_choices))
 
     @classmethod
     def from_protein(cls, protein_sequence: str, genetic_code: int = 1, codon_weights: Optional[dict] = None) -> "ProteinSpec":

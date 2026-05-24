@@ -6,7 +6,7 @@
 
 `cdsopt` is a Python package for optimizing mRNA coding sequences (CDS) using **multi-objective genetic algorithms** (NSGA-II). Given a protein amino-acid sequence, it searches for synonymous codon combinations that balance multiple objectives such as codon adaptation index (CAI), GC content, RNA stability (MFE / AUP), and codon pair bias (CPB).
 
-- **Entry point**: `python -m cdsopt` (currently a stub CLI)
+- **Entry point**: `python -m cdsopt` (click CLI with optimize / resume / report)
 - **Test runner**: `python run_tests.py -v`
 - **Python**: >= 3.13
 - **Package layout**: `cdsopt/` is a flat package under `mRNAOptimizer/`
@@ -16,7 +16,7 @@
 ```
 cdsopt/
 ├── __main__.py              # python -m cdsopt
-├── main.py                  # CLI entry (click), currently stub
+├── main.py                  # CLI entry (click): optimize / resume / report
 ├── run_tests.py             # Unified pytest wrapper
 │
 ├── fitness/                 # Fitness evaluation pipeline
@@ -24,24 +24,26 @@ cdsopt/
 │   └── evaluator.py         # Multi-objective evaluator (CAI, tAI, CG, MFE, AUP, CPB)
 │
 ├── genetic_alg/             # NSGA-II core
-│   ├── individual.py        # ProteinSpec + Individual encoding
-│   ├── nsga2.py             # Fast non-dominated sort, crowding distance, env. selection
+│   ├── individual.py        # ProteinSpec + Individual encoding (supports weighted init)
+│   ├── nsga2.py             # Fast non-dominated sort, env. selection with satisfied priority
 │   ├── operators.py         # Crossover, synonymous mutation, adaptive mute rate, elitism
-│   └── processor.py         # Main GA loop, checkpointing, convergence monitoring
+│   └── processor.py         # Main GA loop, checkpointing, generation fitness dump, dedup
+│
+├── io_utils.py              # Read protein/CDS FASTA, write results (FASTA/CSV/JSON)
 │
 ├── utils/                   # Supporting utilities
-│   ├── cai_tools.py         # CAI weight pre-computation
-│   ├── cg_tools.py          # GC content calculation
+│   ├── scoring.py           # CAI, tAI, CG content (merged from cai_tools+cg_tools+tai_tools)
 │   ├── codon_pair_bias.py   # CPB via codonbias.scores.CodonPairBias
-│   ├── fold_tools.py        # RNA folding: ViennaRNA (exact AUP) / LinearFold (fast MFE)
-│   └── tai_tools.py         # tAI weight pre-computation
+│   └── fold_tools.py        # RNA folding: ViennaRNA (exact AUP) / LinearFold (fast MFE)
 │
-├── tables/                  # Lookup tables
+├── tables/                  # Lookup tables and reference sequences
 │   ├── codon_frequency_table/
 │   ├── genetic_code/        # Standard + vertebrate mitochondrial
-│   └── tgcn/
+│   ├── tgcn/
+│   └── reference_cds/       # Real reference CDS for CPB (e.g. human ACTB NCBI RefSeq)
 │
-└── tests/                   # 70 tests (pytest)
+└── tests/                   # pytest suite
+    ├── test_cli.py
     ├── test_individual.py
     ├── test_fold_tools.py
     ├── test_codon_pair_bias.py
@@ -55,73 +57,114 @@ cdsopt/
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| `individual.py` | ✅ | ProteinSpec pre-generates synonymous codon lists per position. Individual is an integer-index list. Immutable hash/eq for dedup. |
-| `fold_tools.py` | ✅ | Auto-detects `linearfold` CLI in PATH, falls back to ViennaRNA. ViennaRNA mode uses `RNA.fold_compound` + `fc.pf()` for exact AUP (partition function). |
-| `codon_pair_bias.py` | ✅ | Wraps `codonbias.scores.CodonPairBias`. Accepts RNA or DNA. Builds random synthetic reference sequences when none provided. |
-| `fitness/cache.py` | ✅ | LRU cache (maxsize), returns deep copies, hit/miss rate tracking. |
-| `fitness/evaluator.py` | ✅ | `FitnessConfig` dataclass with enable flags and per-objective target/tolerance. `evaluate()` and `evaluate_batch()` (multiprocess). Pre-computes CAI weights once. |
-| `nsga2.py` | ✅ | Standard NSGA-II. Supports target/tolerance: `_obj_value()` returns 0.0 if inside `target ± tolerance`. |
-| `operators.py` | ✅ | Single-point / uniform crossover, synonymous mutation, adaptive mute rate (diversity-driven), elite selection. |
-| `processor.py` | ✅ | Main loop: elitism → reproduce (amplification) → batch evaluate → NSGA-II select. Reusable `Pool`. Checkpoint with version validation. Convergence early-stop. |
-| Unit + integration tests | ✅ | 75 passed, 1 skipped. Includes CLI smoke tests. |
+| `individual.py` | ✅ | ProteinSpec pre-generates synonymous codon lists. `cai_weights` + `total_variants`. Supports `weighted_init`: samples by species CAI weights (`power=10`). `random_individual(weighted=True)` for high-CAI initialization. |
+| `scoring.py` | ✅ | Merged `cai_tools+cg_tools+tai_tools`. `calc_cai`, `calc_tai`, `count_cg`. |
+| `fold_tools.py` | ✅ | Auto-detects `linearfold` CLI, falls back to ViennaRNA. `need_aup` flag skips `pf()/bpp()` when AUP not needed. |
+| `codon_pair_bias.py` | ✅ | Wraps `codonbias.scores.CodonPairBias`. Loads **real reference CDS** from `tables/reference_cds/` (e.g. human ACTB NM_001101.5). No synthetic fallback. |
+| `fitness/cache.py` | ✅ | LRU cache, hit/miss tracking. |
+| `fitness/evaluator.py` | ✅ | `FitnessConfig` with per-objective `target` (Optional[float]) and `tolerance`. No `enable_*` flags: target=None means disabled. CAI and avg_MFE are always enabled. `evaluate_batch()` for multiprocessing. |
+| `nsga2.py` | ✅ | `_obj_value()` returns 0.0 inside `target ± tolerance`. `environmental_selection` sorts **every front** by: 1) satisfied count desc, 2) CAI distance asc, 3) avg_MFE distance asc. Fixes bug where un-sorted fronts put low-satisfied individuals at index 0. |
+| `operators.py` | ✅ | Single-point / uniform crossover, synonymous mutation, adaptive mute rate, elite selection. |
+| `processor.py` | ✅ | Main loop with `prev_seq_0` tracking. Dumps `fitness_gen_{gen:03d}.csv` whenever seq_0 changes. **Reproduce dedup**: `existing.add(child)` prevents sibling duplicates. **Post-selection dedup**: removes duplicates after env. selection and backfills with random individuals. No convergence early-stop. Reusable Pool. Checkpoint with version validation. |
+| `io_utils.py` | ✅ | `read_protein_sequence`, `read_cds_sequences`, `write_results`. `fitness.csv` no longer contains `rna_seq` column. |
+| `main.py` | ✅ | Three commands: `optimize`, `resume`, `report`. YAML config support. **Critical fix**: uses `ctx.get_parameter_source()` to distinguish CLI defaults from explicit arguments; YAML values are no longer masked by Click defaults. |
+| Unit + integration tests | ✅ | pytest suite. |
 
 ## Key Design Decisions
 
-1. **Tolerance mechanism**: `_obj_value()` returns `0.0` for any objective value within `target ± tolerance`. This makes NSGA-II treat such solutions as equally optimal for that objective.
-2. **`avg_MFE` not `MFE`**: The evaluator divides MFE by sequence length so the objective is length-normalized.
-3. **Pool reuse**: `GeneticAlgorithmProcessor` creates a `multiprocessing.Pool` on init and reuses it across generations. Shuts down in `__del__` (guarded by `hasattr`).
-4. **Circular import guard**: `genetic_alg/__init__.py` does **not** import `processor`. `processor.py` uses a local import for `build_objectives`.
-5. **CAI2 mutability**: `cai2.calc_cai` mutates the weights dict passed to it. We always pass a deep copy or pre-computed read-only weights.
-6. **Type annotation**: `from multiprocessing.pool import Pool` (not `multiprocessing.Pool`) to avoid IDE "Variable not allowed in type" warnings. Use `Optional[Pool]`.
+1. **Target-driven objective toggling**: `FitnessConfig` no longer has `enable_*` flags. An objective is active iff its `target` is not `None`. Only `target_cai` and `target_avg_mfe` have non-None defaults.
+2. **Tolerance mechanism**: `_obj_value()` returns `0.0` for any objective value within `target ± tolerance`. NSGA-II treats such solutions as equally optimal for that objective.
+3. **Satisfied-priority sorting**: Within every Pareto front, individuals are ranked by: (1) number of satisfied objectives (desc), (2) CAI distance to target (asc), (3) avg_MFE distance to target (asc). This applies to **all fronts**, not just truncated ones.
+4. **`avg_MFE` not `MFE`**: The evaluator divides MFE by sequence length so the objective is length-normalized.
+5. **Weighted initialization**: `ProteinSpec.random_individual(weighted=True)` samples codons by species CAI weights (sharpened with `power=10`), pushing initial CAI > 0.95. **Caution**: `power=10` is very aggressive and can cause population homogenization (initial CAI ≈ 0.96+). Consider lowering `power` or `target_cai` if diversity collapses.
+6. **Pool reuse**: `GeneticAlgorithmProcessor` creates a `multiprocessing.Pool` on init and reuses it across generations.
+7. **Circular import guard**: `genetic_alg/__init__.py` does **not** import `processor`. `processor.py` uses a local import for `build_objectives`.
+8. **CAI2 mutability**: `cai2.calc_cai` mutates the weights dict passed to it. We always pass a deep copy or pre-computed read-only weights.
+9. **Generation fitness dump**: Whenever `seq_0` (population[0]) changes, a full `fitness_gen_{gen:03d}.csv` is written with all individuals' sequences and fitness values.
+10. **Population deduplication (two layers)**:
+    - **Reproduce layer**: `existing = set(self.population)` + `existing.add(child)` prevents children from duplicating parents or siblings.
+    - **Post-selection layer**: After `environmental_selection`, the final population is deduplicated (`set[Individual]`). Missing slots are backfilled with new random individuals to maintain `population_size`.
+11. **CLI parameter resolution**: `_resolve()` uses `click.get_current_context().get_parameter_source(key)` to detect whether the user explicitly passed a CLI argument. Only explicit CLI arguments override YAML; Click defaults do not.
+12. **Real reference sequences for CPB**: `tables/reference_cds/` stores genuine NCBI RefSeq CDS (e.g. human ACTB). `get_reference_sequences(species)` scans `.fa` files and raises `ValueError` for unsupported species. No synthetic random-sequence fallback.
 
-## Current State (as of latest commit)
+## CLI Commands
+
+### `cdsopt optimize`
+```bash
+cdsopt optimize protein.fa --config config.yaml
+```
+- `--config`: YAML config file
+- `--init-cds`: FASTA with initial CDS sequences
+- `--weighted-init`: Use species CAI weights for random initialization
+- `--species`, `--pop-size`, `--generations`, `--processes`, `--seed`, etc.
+- Per-objective `--target-*` and `--tolerance-*` options
+
+### `cdsopt resume`
+```bash
+cdsopt resume checkpoint.pkl --processes 4
+```
+
+### `cdsopt report`
+```bash
+cdsopt report cds.fa --species human --fold-engine vienna -o report.csv
+```
+Evaluates all objective raw values for given CDS sequences (no targets involved).
+
+## Current State
 
 - **All core algorithm modules implemented and tested**.
-- **CLI (`main.py`) is a stub**: only an empty `click.Command()` skeleton.
-- **End-to-end integration tests pass**: CLI smoke tests verify `optimize`, `resume`, and YAML config paths.
-- **Result serialization implemented**: `pareto_front.fasta`, `fitness.csv`, `summary.json` written after each run.
+- **CLI fully functional**: optimize / resume / report commands.
+- **YAML config support**: `--config` flag. CLI explicit arguments override YAML; Click defaults no longer mask YAML values.
+- **Population deduplication**: Both reproduce and post-selection layers active; every generation ends with `unique=population_size`.
+- **CPB reference sequences**: Real ACTB reference sequence from NCBI replaces synthetic random references.
+- **Result outputs**: `pareto_front.fasta`, `fitness.csv`, `summary.json`, plus per-generation `fitness_gen_{gen:03d}.csv`.
+- **Known active issue — Population homogenization**: `weighted_init` with `power=10` produces initial CAI ≈ 0.96+. When `target_cai` is strict (e.g. 0.97 ± 0.01), nearly all individuals start outside tolerance, causing NSGA-II to collapse into a single CAI-driven front within ~15 generations. Post-selection dedup masks the symptom by injecting random individuals, but the core convergence trend is toward monoculture. Remedies: lower `power` (e.g. 3–5), raise `target_cai`, or increase `mute_rate`.
 - **No visualization**: Pareto front plots, convergence curves not implemented.
 
 ## Future Tasks
 
 ### High Priority
-
 1. ~~Implement CLI (`main.py`)~~ ✅
 2. ~~Result output & serialization~~ ✅
 3. ~~Integration / smoke test~~ ✅
-4. **YAML config file support** ✅ (`--config` flag, CLI args override YAML values)
+4. ~~YAML config file support~~ ✅
+5. ~~Weighted initialization~~ ✅
+6. ~~Init CDS support~~ ✅
+7. ~~Target-driven objective toggling~~ ✅
+8. ~~Population deduplication~~ ✅
+9. ~~Fix config parameter resolution (YAML vs Click defaults)~~ ✅
+10. ~~Fix environmental_selection front sorting~~ ✅
+11. ~~Real reference sequences for CPB~~ ✅
 
 ### Medium Priority
+12. **Address population homogenization**
+    - Reduce `weighted_init` power or make it configurable
+    - Consider adaptive `target_cai` or diversity-preserving selection
+    - Investigate whether `existing.add(child)` + post-selection dedup is sufficient, or if environmental selection itself should penalize duplicates
 
-4. **Convergence visualization**
-   - Plot Pareto front evolution (e.g., CAI vs. avg_MFE over generations)
-   - Plot hypervolume or best-front summary over time
-   - Optional Matplotlib / Plotly dependency
+13. **Convergence visualization**
+    - Plot Pareto front evolution (e.g. CAI vs. avg_MFE over generations)
+    - Plot hypervolume or best-front summary over time
+    - Optional Matplotlib / Plotly dependency
 
-5. **Objective weighting / preference articulation**
-   - Allow user to specify which objectives matter most
-   - Consider weighted sum or reference-point-based selection
-
-6. **Sequence constraints**
-   - Enforce specific codons at given positions (e.g., start codon, restriction sites)
-   - Avoid specific motifs (e.g., cryptic splice sites, Shine-Dalgarno-like sequences)
-   - `not_mutate_idx` already exists in `GAConfig`; extend to motif avoidance
+14. **Sequence constraints**
+    - Enforce specific codons at given positions (e.g. start codon, restriction sites)
+    - Avoid specific motifs (e.g. cryptic splice sites, Shine-Dalgarno-like sequences)
+    - `not_mutate_idx` already exists in `GAConfig`; extend to motif avoidance
 
 ### Low Priority / Nice to Have
+15. **Alternative fold engines**
+    - Integrate RNAfold (ViennaRNA CLI) as another engine option
+    - Support LinearFold partition function mode if available
 
-7. **Alternative fold engines**
-   - Integrate RNAfold (ViennaRNA CLI) as another engine option
-   - Support LinearFold partition function mode if available
+16. **Performance**
+    - Profile batch evaluation bottleneck
+    - Consider caching RNA fold results across generations
+    - Numba / Cython for hot loops if needed
 
-8. **Performance**
-   - Profile batch evaluation bottleneck
-   - Consider caching RNA fold results across generations (many sequences may be similar)
-   - Numba / Cython for hot loops if needed
-
-9. **Documentation**
-   - API docs (sphinx / mkdocs)
-   - Example notebooks
-   - Configuration file support (YAML/JSON) for batch runs
+17. **Documentation**
+    - API docs (sphinx / mkdocs)
+    - Example notebooks
 
 ## Testing Conventions
 

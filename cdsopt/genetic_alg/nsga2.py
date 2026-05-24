@@ -11,7 +11,6 @@ class Objective:
     key: str
     target: float | None = None
     tolerance: float = 0.0
-    direction: str = "minimize"
 
 
 def _obj_value(fitness: dict, obj: Objective) -> float:
@@ -86,18 +85,42 @@ def crowding_distance(front: List[int], fitness_list: List[dict], objectives: Li
     return distances
 
 
+def _count_satisfied(fitness: dict, objectives: List[Objective]) -> int:
+    """Count how many objectives are within target ± tolerance."""
+    count = 0
+    for obj in objectives:
+        if obj.target is None:
+            continue
+        raw = float(fitness.get(obj.key, 0.0))
+        if abs(raw - obj.target) <= obj.tolerance:
+            count += 1
+    return count
+
+
 def environmental_selection(fitness_list: List[dict], n_select: int, objectives: List[Objective]) -> List[int]:
     if n_select >= len(fitness_list):
         return list(range(len(fitness_list)))
 
     fronts = fast_non_dominated_sort(fitness_list, objectives)
     selected: List[int] = []
+
+    def _sort_key(i):
+        fit = fitness_list[i]
+        satisfied = _count_satisfied(fit, objectives)
+        cai_dist = 0.0
+        avg_mfe_dist = 0.0
+        for obj in objectives:
+            if obj.key == "CAI":
+                cai_dist = abs(fit.get(obj.key, 0.0) - obj.target)
+            elif obj.key == "avg_MFE":
+                avg_mfe_dist = abs(fit.get(obj.key, 0.0) - obj.target)
+        return (-satisfied, cai_dist, avg_mfe_dist)
+
     for front in fronts:
-        if len(selected) + len(front) <= n_select:
-            selected.extend(front)
+        front_sorted = sorted(front, key=_sort_key)
+        if len(selected) + len(front_sorted) <= n_select:
+            selected.extend(front_sorted)
         else:
-            cd = crowding_distance(front, fitness_list, objectives)
-            front_sorted = sorted(front, key=lambda i: cd[i], reverse=True)
             selected.extend(front_sorted[: n_select - len(selected)])
             break
     return selected

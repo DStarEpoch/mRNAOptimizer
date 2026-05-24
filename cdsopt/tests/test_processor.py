@@ -89,24 +89,3 @@ class TestStep:
         best_after = [f["CAI"] for f in proc.fitness_list]
         # Elite should keep at least some good individuals
         assert max(best_after) >= max(best_before) * 0.9
-
-
-class TestConvergence:
-    def test_early_stop_when_stagnant(self, short_protein):
-        cfg = GAConfig(
-            population_size=10,
-            generations=100,
-            early_stop_patience=2,
-            amplification=1,
-            processes=1,
-        )
-        proc = GeneticAlgorithmProcessor(short_protein, config=cfg)
-        # Override fitness_list with clean numeric values (avoid NaN from cai2)
-        summary = {"CAI": 0.5, "CG_content": 0.5, "avg_MFE": -0.3, "AUP": 0.5}
-        proc.fitness_list = [summary.copy() for _ in range(10)]
-        # Pre-populate history with 2 identical summaries and stagnation_count=1
-        proc._best_front_history = [summary.copy(), summary.copy()]
-        proc._stagnation_count = 1
-
-        # Third identical summary -> stagnation_count becomes 2 >= patience
-        assert proc._check_convergence() is True

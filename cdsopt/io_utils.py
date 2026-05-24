@@ -84,7 +84,7 @@ def write_results(processor, output_dir: Path, prefix: str = "") -> None:
         desc = " ".join([f"gen{processor.generation}"] + [f"{k}={fit[k]:.4f}" for k in ("CAI", "avg_MFE", "CG_content", "AUP", "CPB") if k in fit])
         descriptions.append(desc)
         row = {"id": f"seq_{i}", "sequence": seq, "length": len(seq)}
-        row.update({k: fit.get(k) for k in fit})
+        row.update({k: fit.get(k) for k in fit if k not in ("rna_seq", "sequence")})
         rows.append(row)
 
     write_fasta(sequences, descriptions, output_dir / f"{prefix}pareto_front.fasta")
@@ -98,6 +98,6 @@ def write_results(processor, output_dir: Path, prefix: str = "") -> None:
         "final_generation": processor.generation,
         "population_size": len(pop),
         "config": {k: getattr(cfg, k) for k in ("population_size", "generations", "mute_rate", "n_elite", "amplification", "processes", "early_stop_patience", "rng_seed")},
-        "fitness_config": {k: getattr(fc, k) for k in ("species", "enable_cai", "enable_tai", "enable_cg", "enable_fold", "enable_cpb", "fold_engine")},
+        "fitness_config": {k: getattr(fc, k) for k in ("species", "genetic_code", "target_cai", "cai_tolerance", "target_avg_mfe", "avg_mfe_tolerance", "target_tai", "tai_tolerance", "target_cg_content", "cg_content_tolerance", "target_aup", "aup_tolerance", "target_cpb", "cpb_tolerance", "fold_engine", "cache_maxsize")},
     }
     write_summary(summary, output_dir / f"{prefix}summary.json")
