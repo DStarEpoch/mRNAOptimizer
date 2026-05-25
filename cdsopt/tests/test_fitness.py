@@ -53,14 +53,15 @@ class TestBuildObjectives:
         objs = build_objectives(cfg)
         keys = [o.key for o in objs]
         assert "CAI" in keys
-        assert "CG_content" in keys
         assert "avg_MFE" in keys
-        assert "AUP" in keys
+        # CG_content and AUP are disabled by default (target=None)
+        assert "CG_content" not in keys
+        assert "AUP" not in keys
         assert "tAI" not in keys
         assert "CPB" not in keys
 
     def test_tai_enabled(self):
-        cfg = FitnessConfig(enable_tai=True)
+        cfg = FitnessConfig(target_tai=0.9)
         objs = build_objectives(cfg)
         keys = [o.key for o in objs]
         assert "tAI" in keys
@@ -85,13 +86,12 @@ class TestFitnessEvaluator:
         ev = FitnessEvaluator()
         result = ev.evaluate("AUGUUUAAAGGG")
         assert "CAI" in result
-        assert "CG_content" in result
         assert "avg_MFE" in result
-        assert "AUP" in result
         assert "MFE" in result
+        # CG_content and AUP are disabled by default
+        assert "CG_content" not in result
+        assert "AUP" not in result
         assert 0.0 <= result["CAI"] <= 1.0
-        assert 0.0 <= result["CG_content"] <= 1.0
-        assert 0.0 <= result["AUP"] <= 1.0
         assert result["avg_MFE"] == pytest.approx(result["MFE"] / len("AUGUUUAAAGGG"), abs=1e-9)
 
     def test_cache_used_on_second_eval(self):
@@ -117,14 +117,14 @@ class TestFitnessEvaluator:
         assert "tAI" not in result
 
     def test_tai_when_enabled(self):
-        cfg = FitnessConfig(enable_tai=True)
+        cfg = FitnessConfig(target_tai=0.9)
         ev = FitnessEvaluator(config=cfg)
         result = ev.evaluate("AUGUUUAAAGGG")
         assert "tAI" in result
         assert isinstance(result["tAI"], float)
 
     def test_cpb_when_enabled(self):
-        cfg = FitnessConfig(enable_cpb=True)
+        cfg = FitnessConfig(target_cpb=0.0)
         ev = FitnessEvaluator(config=cfg)
         result = ev.evaluate("AUGUUUAAAGGG")
         assert "CPB" in result

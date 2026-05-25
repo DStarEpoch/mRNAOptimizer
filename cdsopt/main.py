@@ -148,12 +148,41 @@ def optimize(**kwargs) -> None:
 
     params = {k: _resolve(k, d) for k, d in _PARAM_DEFAULTS.items()}
 
-    # not_mutate_idx can be a comma-separated string or a list in YAML
+    # not_mutate_idx can be a comma-separated string or a list in YAML.
+    # Supports:
+    #   - single int: 5  (fixes codon index 5)
+    #   - tuple/list (start, end): (10, 20)  (fixes codons 10..20 inclusive)
+    def _parse_nmi_item(item):
+        if isinstance(item, int):
+            return {item}
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            return set(range(int(item[0]), int(item[1]) + 1))
+        if isinstance(item, str):
+            item = item.strip()
+            if not item:
+                return set()
+            # String tuple like "(10, 20)"
+            if item.startswith("(") and item.endswith(")"):
+                parts = [p.strip() for p in item[1:-1].split(",")]
+                if len(parts) == 2:
+                    return set(range(int(parts[0]), int(parts[1]) + 1))
+            # Range like "10-20"
+            if "-" in item:
+                parts = item.split("-")
+                if len(parts) == 2 and all(p.strip().isdigit() for p in parts):
+                    return set(range(int(parts[0]), int(parts[1]) + 1))
+            return {int(item)}
+        return set()
+
     nmi = kwargs["not_mutate_idx"]
     _yaml_nmi = yaml_cfg.get("not_mutate_idx")
+    not_mutate_set: set[int] = set()
     if _yaml_nmi is not None and nmi == "":
-        nmi = ",".join(str(x) for x in _yaml_nmi) if isinstance(_yaml_nmi, list) else str(_yaml_nmi)
-    not_mutate_set = {int(x.strip()) for x in nmi.split(",") if x.strip()}
+        for item in _yaml_nmi if isinstance(_yaml_nmi, list) else [_yaml_nmi]:
+            not_mutate_set.update(_parse_nmi_item(item))
+    else:
+        for item in nmi.split(","):
+            not_mutate_set.update(_parse_nmi_item(item))
 
     fitness_config = _build_fitness_config(yaml_cfg, **params)
     weighted_init = kwargs.get("weighted_init") or yaml_cfg.get("weighted_init", False)

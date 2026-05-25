@@ -30,7 +30,7 @@ class GAConfig:
     n_elite: int = 2
     amplification: int = 3
     processes: int = 1
-    output_interval: int = 1
+    output_interval: int = 10
     early_stop_patience: int = 50
     fitness_config: FitnessConfig = field(default_factory=FitnessConfig)
     not_mutate_idx: set[int] = field(default_factory=set)
@@ -107,7 +107,7 @@ class GeneticAlgorithmProcessor:
             self.generation = gen
             self._step()
             curr_seq_0 = self.spec.to_rna(self.population[0])
-            if curr_seq_0 != prev_seq_0:
+            if curr_seq_0 != prev_seq_0 or gen % self.cfg.output_interval == 0:
                 self._write_generation_fitness(out_path, gen)
                 prev_seq_0 = curr_seq_0
             if gen % self.cfg.output_interval == 0:
@@ -141,14 +141,14 @@ class GeneticAlgorithmProcessor:
                 seen.add(ind)
         n_backfill = self.cfg.population_size - len(unique_pop)
         if n_backfill > 0:
-            logger.info("Gen %d dedup removed %d duplicates, backfilling %d random individuals", self.generation, len(self.population) - len(unique_pop), n_backfill)
+            logger.debug("Gen %d dedup removed %d duplicates, backfilling %d random individuals", self.generation, len(self.population) - len(unique_pop), n_backfill)
         while len(unique_pop) < self.cfg.population_size:
             new_ind = self.spec.random_individual(rng=self.rng, weighted=self.cfg.weighted_init)
             unique_pop.append(new_ind)
             unique_fitness.append(self.evaluator.evaluate(self.spec.to_rna(new_ind)))
         self.population = unique_pop
         self.fitness_list = unique_fitness
-        logger.info("Gen %d step complete: pop=%d, unique=%d, elite=%d, children=%d", self.generation, len(self.population), len(set(self.population)), len(elites), len(children))
+        logger.debug("Gen %d step complete: pop=%d, unique=%d, elite=%d, children=%d", self.generation, len(self.population), len(set(self.population)), len(elites), len(children))
 
     def _reproduce(self) -> List[Individual]:
         n_children = self.cfg.population_size * self.cfg.amplification
