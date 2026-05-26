@@ -14,13 +14,18 @@ class GeneticOperators:
         self.spec = spec
         self.base_mute_rate = base_mute_rate
 
-    def single_point_crossover(self, parent1: Individual, parent2: Individual, rng: random.Random | None = None) -> Individual:
+    def single_point_crossover(self, parent1: Individual, parent2: Individual, not_mutate_idx: set[int] | None = None, rng: random.Random | None = None) -> Individual:
         gen = rng or random
         length = len(parent1)
         if length <= 1:
             return parent1.copy()
         cp = gen.randint(1, length - 1)
-        return Individual(parent1.indices[:cp] + parent2.indices[cp:])
+        child_indices = parent1.indices[:cp] + parent2.indices[cp:]
+        if not_mutate_idx:
+            child_indices = list(child_indices)
+            for i in not_mutate_idx:
+                child_indices[i] = parent1.indices[i]
+        return Individual(child_indices)
 
     def uniform_crossover(self, parent1: Individual, parent2: Individual, rng: random.Random | None = None) -> Individual:
         gen = rng or random

@@ -31,7 +31,6 @@ class GAConfig:
     amplification: int = 3
     processes: int = 1
     output_interval: int = 10
-    early_stop_patience: int = 50
     fitness_config: FitnessConfig = field(default_factory=FitnessConfig)
     not_mutate_idx: set[int] = field(default_factory=set)
     rng_seed: int | None = None
@@ -73,6 +72,7 @@ class GeneticAlgorithmProcessor:
         self._pool: Optional[Pool] = None
         if self.cfg.processes > 1:
             self._pool = Pool(processes=self.cfg.processes)
+        self._fixed_ref: Individual | None = None
         self._initialize_population(init_cds_list)
 
     def _initialize_population(self, init_cds_list: List[str] | None) -> None:
@@ -87,11 +87,18 @@ class GeneticAlgorithmProcessor:
                 except ValueError as e:
                     logger.warning("Skipping invalid init CDS: %s", e)
             logger.info("Loaded %d initial CDS sequences from input", n_init)
+        if self.population:
+            self._fixed_ref = self.population[0].copy()
+        else:
+            self._fixed_ref = self.spec.random_individual(self.rng, weighted=True)
         n_random = self.cfg.population_size - len(self.population)
         if n_random > 0:
             logger.info("Generating %d random individuals to fill population (weighted=%s)", n_random, self.cfg.weighted_init)
             for _ in range(n_random):
-                self.population.append(self.spec.random_individual(self.rng, weighted=self.cfg.weighted_init))
+                self.population.append(self.spec.random_individual(
+                    self.rng, weighted=self.cfg.weighted_init,
+                    reference=self._fixed_ref, fixed_idx=self.cfg.not_mutate_idx
+                ))
         logger.info("Evaluating initial population of %d individuals...", len(self.population))
         self._evaluate()
         init_unique = len(set(self.population))
@@ -143,7 +150,10 @@ class GeneticAlgorithmProcessor:
         if n_backfill > 0:
             logger.debug("Gen %d dedup removed %d duplicates, backfilling %d random individuals", self.generation, len(self.population) - len(unique_pop), n_backfill)
         while len(unique_pop) < self.cfg.population_size:
-            new_ind = self.spec.random_individual(rng=self.rng, weighted=self.cfg.weighted_init)
+            new_ind = self.spec.random_individual(
+                rng=self.rng, weighted=self.cfg.weighted_init,
+                reference=self._fixed_ref, fixed_idx=self.cfg.not_mutate_idx
+            )
             unique_pop.append(new_ind)
             unique_fitness.append(self.evaluator.evaluate(self.spec.to_rna(new_ind)))
         self.population = unique_pop
@@ -162,7 +172,7 @@ class GeneticAlgorithmProcessor:
             attempts += 1
             p1 = self.rng.choice(self.population)
             p2 = self.rng.choice(self.population)
-            child = self.operators.single_point_crossover(p1, p2, rng=self.rng)
+            child = self.operators.single_point_crossover(p1, p2, not_mutate_idx=self.cfg.not_mutate_idx, rng=self.rng)
             child = self.operators.mutate(child, mute_rate=mute_rate, not_mutate_idx=self.cfg.not_mutate_idx, rng=self.rng)
             if not diversity_limit_reached and child in existing:
                 skipped += 1
@@ -225,6 +235,7 @@ class GeneticAlgorithmProcessor:
             "population": [ind.indices for ind in self.population],
             "fitness_list": self.fitness_list,
             "config": self.cfg,
+            "fixed_ref": self._fixed_ref.indices if self._fixed_ref else None,
             "rng_state": self.rng.getstate(),
 
         }
@@ -253,6 +264,8 @@ class GeneticAlgorithmProcessor:
         instance.population = [Individual(idx) for idx in data["population"]]
         instance.fitness_list = data["fitness_list"]
         instance.generation = data["generation"]
+        fixed_ref_indices = data.get("fixed_ref")
+        instance._fixed_ref = Individual(fixed_ref_indices) if fixed_ref_indices is not None else None
 
         instance._pool = None
         if cfg.processes > 1:

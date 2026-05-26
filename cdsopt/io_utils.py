@@ -97,7 +97,7 @@ def write_results(processor, output_dir: Path, prefix: str = "") -> None:
         "protein_length": len(spec.protein_sequence),
         "final_generation": processor.generation,
         "population_size": len(pop),
-        "config": {k: getattr(cfg, k) for k in ("population_size", "generations", "mute_rate", "n_elite", "amplification", "processes", "early_stop_patience", "rng_seed")},
+        "config": {k: getattr(cfg, k) for k in ("population_size", "generations", "mute_rate", "n_elite", "amplification", "processes")},
         "fitness_config": {k: getattr(fc, k) for k in ("species", "genetic_code", "target_cai", "cai_tolerance", "target_avg_mfe", "avg_mfe_tolerance", "target_tai", "tai_tolerance", "target_cg_content", "cg_content_tolerance", "target_aup", "aup_tolerance", "target_cpb", "cpb_tolerance", "fold_engine", "cache_maxsize")},
     }
     write_summary(summary, output_dir / f"{prefix}summary.json")

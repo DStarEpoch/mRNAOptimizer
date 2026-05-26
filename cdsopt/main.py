@@ -31,8 +31,8 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
 _PARAM_DEFAULTS = {
     "species": "human", "pop_size": 100, "generations": 1000, "processes": 1,
     "seed": None, "output_dir": "./outputs",
-    "fold_engine": "auto", "amplification": 3, "mute_rate": 0.05, "n_elite": 10,
-    "early_stop_patience": 50, "not_mutate_idx": "",
+    "fold_engine": "auto", "amplification": 3, "mute_rate": 0.05, 
+    "n_elite": 10,"not_mutate_idx": "",
     "target_cai": 0.9, "tolerance_cai": 0.02,
     "target_tai": None, "tolerance_tai": 0.03,
     "target_cg": None, "tolerance_cg": 0.005,
@@ -194,7 +194,6 @@ def optimize(**kwargs) -> None:
         amplification=params["amplification"],
         mute_rate=params["mute_rate"],
         n_elite=params["n_elite"],
-        early_stop_patience=params["early_stop_patience"],
         fitness_config=fitness_config,
         not_mutate_idx=not_mutate_set,
         weighted_init=weighted_init,

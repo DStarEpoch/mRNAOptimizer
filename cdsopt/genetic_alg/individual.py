@@ -62,11 +62,15 @@ class ProteinSpec:
             self.codon_choices[i][individual[i]] for i in range(self.length)
         )
 
-    def random_individual(self, rng: random.Random | None = None, weighted: bool = False) -> "Individual":
-        """Generate a random individual. If weighted=True, sample by CAI weights."""
+    def random_individual(self, rng: random.Random | None = None, weighted: bool = False, reference: "Individual" | None = None, fixed_idx: set[int] | None = None) -> "Individual":
+        """Generate a random individual. If weighted=True, sample by CAI weights.
+        If reference and fixed_idx are provided, fixed positions are copied from reference."""
         gen = rng or random
         indices = []
         for i, choices in enumerate(self.codon_choices):
+            if reference is not None and fixed_idx and i in fixed_idx:
+                indices.append(reference.indices[i])
+                continue
             if weighted and self.cai_weights and self.cai_weights[i]:
                 idx = gen.choices(range(len(choices)), weights=self.cai_weights[i], k=1)[0]
             else:
