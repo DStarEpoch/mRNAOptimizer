@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 RNA folding tools with auto-detection of LinearFold and ViennaRNA fallback.
-
-ViennaRNA mode uses partition function for exact AUP.
-LinearFold mode falls back to dot-counting.
 """
 from __future__ import annotations
 
@@ -18,36 +15,17 @@ def _fold_vienna(sequence: str, need_aup: bool = True) -> dict:
     fc = RNA.fold_compound(sequence)
     ss, mfe = fc.mfe()
     if need_aup:
-        fc.pf()
-        aup = _compute_aup_vienna(fc, len(sequence))
+        aup = _compute_aup_from_structure(ss)
     else:
         aup = 0.0
     return {"mfe": mfe, "structure": ss, "aup": aup}
 
 
-def _compute_aup_vienna(fc, seq_len: int) -> float:
-    """Compute AUP from base-pair probability matrix."""
-    try:
-        bpp = fc.bpp()
-        if not bpp:
-            raise ValueError("empty bpp")
-    except Exception:
-        # Fallback: dot-counting from MFE structure
+def _compute_aup_from_structure(structure: str) -> float:
+    """Compute AUP from a dot-bracket structure (MFE-based, consistent across engines)."""
+    if not structure:
         return 0.0
-
-    pairing_probs = [0.0] * seq_len
-    try:
-        for i in range(1, seq_len + 1):
-            if i < len(bpp) and bpp[i] is not None:
-                if hasattr(bpp[i], "values"):
-                    pairing_probs[i - 1] = sum(bpp[i].values())
-                elif hasattr(bpp[i], "__iter__"):
-                    pairing_probs[i - 1] = sum(float(v) for v in bpp[i] if v)
-    except Exception:
-        return 0.0
-
-    aup = sum(1.0 - p for p in pairing_probs) / seq_len if seq_len > 0 else 0.0
-    return max(0.0, min(1.0, aup))
+    return structure.count(".") / len(structure)
 
 
 def _fold_linearfold(sequence: str, need_aup: bool = True) -> dict:
@@ -89,7 +67,7 @@ def _fold_linearfold(sequence: str, need_aup: bool = True) -> dict:
     except ValueError:
         raise RuntimeError(f"Cannot parse MFE from {mfe_str!r}")
 
-    aup = structure.count(".") / len(structure) if need_aup and len(structure) > 0 else 0.0
+    aup = _compute_aup_from_structure(structure) if need_aup else 0.0
     return {"mfe": mfe, "structure": structure, "aup": aup}
 
 

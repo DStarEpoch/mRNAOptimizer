@@ -226,7 +226,7 @@ def resume(checkpoint: Path, processes: int | None, output_dir: Path | None) -> 
 @click.command()
 @click.argument("cds", type=click.Path(exists=True, path_type=Path))
 @click.option("-s", "--species", default="human", help="Host species for codon usage", show_default=True)
-@click.option("--fold-engine", default="auto", show_default=True)
+@click.option("--fold-engine", default="auto", show_default=True, help="RNA folding engine: auto, vienna, or linearfold")
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file (CSV); default: stdout")
 def report(cds: Path, species: str, fold_engine: str, output: Path | None) -> None:
     """Evaluate all fitness parameters for given CDS sequences fasta file."""
