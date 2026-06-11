@@ -1,3 +1,6 @@
 [submodule "submodules/LinearFold"]
 	path = submodules/LinearFold
 	url = https://github.com/LinearFold/LinearFold.git
+[submodule "submodules/GEMORNA"]
+	path = submodules/GEMORNA
+	url = https://github.com/RainaBio/GEMORNA.git

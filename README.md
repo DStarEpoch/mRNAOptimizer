@@ -28,14 +28,19 @@ make
 ```
 
 **Windows (MinGW / MSYS2)**
+> **Note:** `mingw32-make` may fail on the `chmod` step (which is not needed on Windows). If so, compile directly with `g++`:
 ```bash
 cd submodules/LinearFold
-mingw32-make
-```
+> cd submodules/LinearFold
+> g++ src/LinearFold.cpp -std=c++11 -O3 -Dlv -Dis_cube_pruning -Dis_candidate_list -o bin/linearfold_v.exe
+> g++ src/LinearFold.cpp -std=c++11 -O3 -Dis_cube_pruning -Dis_candidate_list -o bin/linearfold_c.exe
+> ```
 
 The build produces two binaries:
 - `submodules/LinearFold/bin/linearfold_v` (Vienna parameters)
 - `submodules/LinearFold/bin/linearfold_c` (CONTRAfold parameters)
+
+On Windows, the binaries have a `.exe` extension and a `linearfold.bat` wrapper is provided for `cdsopt` auto-detection.
 
 #### 3. Add to PATH
 

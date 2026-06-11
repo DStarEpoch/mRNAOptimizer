@@ -34,18 +34,13 @@ def _fold_linearfold(sequence: str, need_aup: bool = True) -> dict:
     if executable is None:
         raise FileNotFoundError("linearfold not found in PATH")
 
-    # Use echo | linearfold -V to match the canonical usage pattern
-    p1 = subprocess.Popen(
-        ["echo", sequence],
-        stdout=subprocess.PIPE,
-    )
+    # Use input= instead of echo pipe for Windows compatibility.
     result = subprocess.run(
         [executable, "-V"],
-        stdin=p1.stdout,
+        input=sequence + "\n",
         capture_output=True,
         text=True,
     )
-    p1.stdout.close()
 
     if result.returncode != 0:
         raise RuntimeError(
