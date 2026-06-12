@@ -11,6 +11,8 @@ import click
 from cdsopt.fitness.evaluator import FitnessConfig, FitnessEvaluator
 from cdsopt.genetic_alg.processor import GAConfig, GeneticAlgorithmProcessor
 from cdsopt.io_utils import read_protein_sequence, read_cds_sequences, write_results
+from cdsopt.utils.fold_tools import estimate_fold
+from cdsopt.utils.scoring import count_cg
 
 logger = logging.getLogger(__name__)
 
@@ -223,13 +225,57 @@ def resume(checkpoint: Path, processes: int | None, output_dir: Path | None) -> 
     logger.info("Optimization complete. Results written to %s", out)
 
 
+def _looks_like_cds(rna_seq: str, genetic_code: int = 1) -> bool:
+    """Heuristic check whether an RNA sequence is a CDS (or CDS fragment).
+
+    A sequence is treated as CDS-like when:
+      - its length is a multiple of 3 and >= 3 nt;
+      - it only contains A/C/G/U;
+      - every codon exists in the selected genetic code table;
+      - no internal stop codon is present.
+
+    Start and stop codons are intentionally *not* required so that partial
+    CDS regions can also be analyzed.
+    """
+    seq = rna_seq.upper().replace("T", "U")
+    if len(seq) % 3 != 0 or len(seq) < 3:
+        return False
+    if not set(seq).issubset({"A", "C", "G", "U"}):
+        return False
+
+    from cdsopt.tables.genetic_code import get_code_map_by_genetic_code
+    code_map = get_code_map_by_genetic_code(genetic_code)
+    valid_codons: set[str] = set()
+    stop_codons: set[str] = set()
+    for aa, codons in code_map.items():
+        for codon in codons:
+            codon = codon.upper().replace("T", "U")
+            valid_codons.add(codon)
+            if aa == "*":
+                stop_codons.add(codon)
+
+    for i in range(0, len(seq), 3):
+        codon = seq[i : i + 3]
+        if codon not in valid_codons:
+            return False
+        if codon in stop_codons:
+            return False
+    return True
+
+
 @click.command()
-@click.argument("cds", type=click.Path(exists=True, path_type=Path))
+@click.argument("seq", type=click.Path(exists=True, path_type=Path))
 @click.option("-s", "--species", default="human", help="Host species for codon usage", show_default=True)
 @click.option("--fold-engine", default="auto", show_default=True, help="RNA folding engine: auto, vienna, or linearfold")
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file (CSV); default: stdout")
-def report(cds: Path, species: str, fold_engine: str, output: Path | None) -> None:
-    """Evaluate all fitness parameters for given CDS sequences fasta file."""
+def report(seq: Path, species: str, fold_engine: str, output: Path | None) -> None:
+    """Evaluate fitness parameters for CDS or full-length mRNA sequences.
+
+    SEQ: FASTA file containing RNA sequences.  Sequences recognized as CDS
+    (length multiple of 3, valid codons, no internal stop) are analyzed with
+    all metrics (CAI, tAI, CG, MFE, AUP, CPB).  Non-CDS sequences only get
+    structural metrics (MFE, avg_MFE, AUP) and global CG content.
+    """
     fitness_config = FitnessConfig(
         species=species,
         fold_engine=fold_engine,
@@ -243,16 +289,35 @@ def report(cds: Path, species: str, fold_engine: str, output: Path | None) -> No
     evaluator = FitnessEvaluator(config=fitness_config)
 
     from Bio import SeqIO
-    records = list(SeqIO.parse(cds, "fasta"))
-    logger.info("Loaded %d CDS sequences from %s", len(records), cds)
+    records = list(SeqIO.parse(seq, "fasta"))
+    logger.info("Loaded %d sequences from %s", len(records), seq)
 
     rows = []
     for record in records:
-        seq = str(record.seq).upper().replace("T", "U")
-        fit = evaluator.evaluate(seq)
+        rna_seq = str(record.seq).upper().replace("T", "U")
+        is_cds = _looks_like_cds(rna_seq)
+
+        if is_cds:
+            fit = evaluator.evaluate(rna_seq)
+        else:
+            # Full-length / UTR sequences: structural metrics only.
+            fd = estimate_fold(rna_seq, engine=evaluator._resolved_fold_engine, need_aup=True)
+            fit = {
+                "rna_seq": rna_seq,
+                "MFE": float(fd["mfe"]),
+                "avg_MFE": float(fd["mfe"]) / len(rna_seq) if len(rna_seq) > 0 else 0.0,
+                "structure": fd["structure"],
+                "AUP": float(fd["aup"]),
+                "CG_content": float(count_cg(rna_seq)),
+                "CAI": "",
+                "tAI": "",
+                "CPB": "",
+            }
+
         rows.append({
             "id": record.id,
-            "length": len(seq),
+            "length": len(rna_seq),
+            "is_cds": is_cds,
             "CAI": fit.get("CAI", ""),
             "tAI": fit.get("tAI", ""),
             "CG_content": fit.get("CG_content", ""),
@@ -263,7 +328,7 @@ def report(cds: Path, species: str, fold_engine: str, output: Path | None) -> No
         })
 
     import csv, sys
-    fieldnames = ["id", "length", "CAI", "tAI", "CG_content", "MFE", "avg_MFE", "AUP", "CPB"]
+    fieldnames = ["id", "length", "is_cds", "CAI", "tAI", "CG_content", "MFE", "avg_MFE", "AUP", "CPB"]
     fobj = open(output, "w", newline="", encoding="utf-8") if output else sys.stdout
     writer = csv.DictWriter(fobj, fieldnames=fieldnames)
     writer.writeheader()

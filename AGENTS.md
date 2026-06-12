@@ -110,6 +110,73 @@ cdsopt report cds.fa --species human --fold-engine vienna -o report.csv
 ```
 Evaluates all objective raw values for given CDS sequences (no targets involved).
 
+## UTR Optimization Subproject (`utropt/`)
+
+A new subproject is being developed under `mRNAOptimizer/utropt/` to handle **5' UTR / 3' UTR evaluation and design**. It is intentionally decoupled from `cdsopt/` but designed to work with it.
+
+### Goals
+
+1. Evaluate 5' and 3' UTRs with biologically meaningful metrics (Kozak, uORF, MFE, ARE, PAS, miRNA binding, GC, etc.).
+2. Design UTR variants by either:
+   - Rule-based replacement from a curated UTR library (Kozak, β-globin, bGH pA, SV40 pA, etc.)
+   - Generative design via GEMORNA (`submodules/GEMORNA`) for 5'UTR / 3'UTR
+3. Assemble full-length mRNA candidates from 5'UTR + CDS + 3'UTR + polyA (polyA kept unchanged).
+4. Provide an independent CLI: `python -m utropt`.
+
+### Planned Module Layout
+
+```
+utropt/
+├── __init__.py
+├── cli.py                  # evaluate / design / score commands
+├── library.py              # Curated 5'/3' UTR parts
+├── assembler.py            # assemble_mrna(five_utr, cds, three_utr, poly_a)
+├── evaluator.py            # 5'/3'/full-mRNA metrics
+├── designer.py             # rule-based + GEMORNA-based generation
+├── utils.py                # FASTA helpers, coordinate mapping
+└── tests/
+    ├── test_library.py
+    ├── test_assembler.py
+    └── test_evaluator.py
+```
+
+### Implementation Status
+
+| Module | Status | Notes |
+|--------|--------|-------|
+| `utropt/__init__.py` | ✅ | Package marker |
+| `utropt/utils.py` | ✅ | RNA sequence utilities, motif scanning helpers |
+| `utropt/gemorna_adapter.py` | ✅ | Direct import wrapper for GEMORNA 5'/3' UTR predictors; verified on Python 3.13 |
+| `utropt/mirna_seeds.py` | ✅ | Built-in human miRNA seed DB + TargetScan/miRBase parsers |
+| `utropt/rbp_motifs.py` | ✅ | ATtRACT parser and RBP motif scanner |
+| `utropt/evaluator.py` | ✅ | 5'/3'/full-mRNA evaluator with Kozak, uORF, MFE, ARE, PAS, miRNA, RBP, GEMORNA scores |
+| `utropt/library.py` | ⏳ | Curated UTR part library (Kozak, β-globin, bGH pA, SV40 pA, etc.) |
+| `utropt/assembler.py` | ⏳ | Full-mRNA assembler preserving polyA |
+| `utropt/designer.py` | ⏳ | Rule-based + GEMORNA-based candidate generation |
+| `utropt/cli.py` | ⏳ | `evaluate` / `design` / `score` commands |
+| `utropt/tests/` | ⏳ | pytest suite |
+
+### Tool Integration
+
+| Tool | Purpose | Integration Notes |
+|------|---------|-------------------|
+| **GEMORNA** | Generate/predict 5'UTR and 3'UTR | Imported directly via `utropt.gemorna_adapter`; `torch` added to `[utropt]` optional deps |
+| **ViennaRNA / LinearFold** | RNA folding | Reuse `cdsopt.utils.fold_tools` |
+| **ATtRACT** | RBP motif scanning | Parser in `utropt.rbp_motifs`; expects `data/ATtRACT/ATtRACT_db.txt` |
+| **TargetScan / miRBase data** | miRNA target prediction | Seed-match scanning with built-in fallback DB |
+| **Rule-based scanners** | Kozak, uORF, ARE, PAS | Built-in |
+
+### Design Cases
+
+For each of the two YingXuProject mRNAs, generate candidates for:
+
+| Group | 5' UTR | CDS | 3' UTR |
+|------|--------|-----|--------|
+| G1 | Original | Original | Original |
+| G2 | Original | Optimized | Original |
+| G3 | Replacement / GEMORNA | Original | Replacement / GEMORNA |
+| G4 | Replacement / GEMORNA | Optimized | Replacement / GEMORNA |
+
 ## Current State
 
 - **All core algorithm modules implemented and tested**.
@@ -118,6 +185,12 @@ Evaluates all objective raw values for given CDS sequences (no targets involved)
 - **Population deduplication**: Both reproduce and post-selection layers active; every generation ends with `unique=population_size`.
 - **CPB reference sequences**: Real ACTB reference sequence from NCBI replaces synthetic random references.
 - **Result outputs**: `pareto_front.fasta`, `fitness.csv`, `summary.json`, plus per-generation `fitness_gen_{gen:03d}.csv`.
+- **LinearFold Windows build**: Compiled `linearfold_v.exe` / `linearfold_c.exe` with MinGW; `cdsopt` auto-detects via `linearfold.bat` wrapper.
+- **LinearFold submodule migration**: Switched to `DStarEpoch/LinearFork` fork with Windows MinGW support; submodule pointer updated and pushed.
+- **`report` command extended**: Can now analyze full-length mRNA sequences; non-CDS sequences only receive structural metrics.
+- **`utropt/` evaluation module implemented**: `UTREvaluator` supports 5'UTR (Kozak, uORF, MFE, GEMORNA TIE), 3'UTR (PAS, ARE, miRNA, RBP, MFE, GEMORNA stability), and full-mRNA metrics. Verified on RNA editing-1 5'UTR.
+- **GEMORNA integration**: Registered as Git submodule; direct Python import via `utropt.gemorna_adapter` works under Python 3.13; `torch` added to `[utropt]` optional dependencies.
+- **RBP motif data**: ATtRACT database added under `data/ATtRACT/` and wired into `utropt.rbp_motifs`.
 - **Known active issue — Population homogenization**: `weighted_init` with `power=10` produces initial CAI ≈ 0.96+. When `target_cai` is strict (e.g. 0.97 ± 0.01), nearly all individuals start outside tolerance, causing NSGA-II to collapse into a single CAI-driven front within ~15 generations. Post-selection dedup masks the symptom by injecting random individuals, but the core convergence trend is toward monoculture. Remedies: lower `power` (e.g. 3–5), raise `target_cai`, or increase `mute_rate`.
 - **No visualization**: Pareto front plots, convergence curves not implemented.
 
@@ -135,34 +208,44 @@ Evaluates all objective raw values for given CDS sequences (no targets involved)
 9. ~~Fix config parameter resolution (YAML vs Click defaults)~~ ✅
 10. ~~Fix environmental_selection front sorting~~ ✅
 11. ~~Real reference sequences for CPB~~ ✅
+12. ~~Implement `utropt/` evaluation module~~ ✅
+    - Rule-based metrics (Kozak, uORF, ARE, PAS, miRNA, RBP)
+    - GEMORNA 5'/3' UTR prediction integration
+    - Full-mRNA structural evaluation
+13. **Complete `utropt/` design workflow**
+    - Implement `library.py` with curated 5'/3' UTR parts
+    - Implement `assembler.py` with polyA preservation
+    - Implement `designer.py` for rule-based + GEMORNA candidate generation
+    - Implement `cli.py` with `evaluate` / `design` / `score` commands
+    - Validate full 6-group design matrix on RNA editing-1 / RNA editing-2
 
 ### Medium Priority
-12. **Address population homogenization**
+14. **Address population homogenization**
     - Reduce `weighted_init` power or make it configurable
     - Consider adaptive `target_cai` or diversity-preserving selection
     - Investigate whether `existing.add(child)` + post-selection dedup is sufficient, or if environmental selection itself should penalize duplicates
 
-13. **Convergence visualization**
+15. **Convergence visualization**
     - Plot Pareto front evolution (e.g. CAI vs. avg_MFE over generations)
     - Plot hypervolume or best-front summary over time
     - Optional Matplotlib / Plotly dependency
 
-14. **Sequence constraints**
+16. **Sequence constraints**
     - Enforce specific codons at given positions (e.g. start codon, restriction sites)
     - Avoid specific motifs (e.g. cryptic splice sites, Shine-Dalgarno-like sequences)
     - `not_mutate_idx` already exists in `GAConfig`; extend to motif avoidance
 
 ### Low Priority / Nice to Have
-15. **Alternative fold engines**
+17. **Alternative fold engines**
     - Integrate RNAfold (ViennaRNA CLI) as another engine option
     - Support LinearFold partition function mode if available
 
-16. **Performance**
+18. **Performance**
     - Profile batch evaluation bottleneck
     - Consider caching RNA fold results across generations
     - Numba / Cython for hot loops if needed
 
-17. **Documentation**
+19. **Documentation**
     - API docs (sphinx / mkdocs)
     - Example notebooks
 

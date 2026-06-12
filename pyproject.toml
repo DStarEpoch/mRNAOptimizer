@@ -26,10 +26,20 @@ dev = [
     "pytest>=8.0",
     "pytest-cov",
 ]
+# PyTorch + GEMORNA support for utropt UTR prediction/design.
+# Install with: pip install -e ".[utropt]"
+utropt = [
+    "torch>=2.4.0",
+    "torchvision",
+    "torchaudio",
+    "numpy>=1.26",
+    "pandas",
+    "scikit-learn",
+]
 
 [project.scripts]
 cdsopt = "cdsopt.main:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cdsopt*"]
+include = ["cdsopt*", "utropt*"]
