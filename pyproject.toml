@@ -8,17 +8,17 @@ version = "0.1.0"
 description = "mRNA sequence optimizer"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
-    "biopython==1.85",
-    "click==8.2.1",
+    "biopython>=1.72",
+    "click>=8.1",
     "httpx",
     "tqdm",
-    "ViennaRNA==2.7.0",
-    "cai2==1.0.5",
-    "PyYAML==6.0.2",
-    "jupyter==1.1.1",
-    "codon-bias==0.5.0",
+    "ViennaRNA>=2.6",
+    "cai2>=1.0.5",
+    "PyYAML>=6.0",
+    "jupyter>=1.0",
+    "codon-bias>=0.5.0",
 ]
 
 [project.optional-dependencies]
@@ -28,12 +28,14 @@ dev = [
 ]
 # PyTorch + GEMORNA support for utropt UTR prediction/design.
 # Install with: pip install -e ".[utropt]"
+# These versions match GEMORNA's environment.yaml (python 3.10 compatible).
 utropt = [
-    "torch>=2.4.0",
-    "torchvision",
-    "torchaudio",
-    "numpy>=1.26",
-    "pandas",
+    "torch==2.2.0",
+    "torchvision==0.17.0",
+    "torchaudio==2.2.0",
+    "torchtext==0.6.0",
+    "numpy==1.26.4",
+    "pandas==2.0.2",
     "scikit-learn",
 ]
 

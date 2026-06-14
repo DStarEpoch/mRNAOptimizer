@@ -135,3 +135,57 @@ class TestFitnessEvaluator:
         result = ev.evaluate("AUG")
         assert isinstance(result, dict)
         assert "CAI" in result
+
+    def test_context_folding_includes_prefix_suffix(self):
+        cfg = FitnessConfig(prefix="GGGAAA", suffix="UUUCCC")
+        ev = FitnessEvaluator(config=cfg)
+        cds = "AUGUUUAAAGGG"
+        result = ev.evaluate(cds)
+
+        assert result["cds_length"] == len(cds)
+        assert result["prefix_length"] == 6
+        assert result["suffix_length"] == 6
+        assert result["full_length"] == len(cds) + 6 + 6
+        # Folding was performed on the full molecule.
+        assert result["avg_MFE"] == pytest.approx(result["MFE"] / result["full_length"], abs=1e-9)
+
+    def test_context_does_not_change_cds_metrics(self):
+        cds = "AUGUUUAAAGGG"
+
+        ev_no_context = FitnessEvaluator(config=FitnessConfig())
+        r1 = ev_no_context.evaluate(cds)
+
+        ev_context = FitnessEvaluator(config=FitnessConfig(prefix="GGGAAA", suffix="UUUCCC"))
+        r2 = ev_context.evaluate(cds)
+
+        # CDS-only metrics must be identical.
+        assert r1["CAI"] == r2["CAI"]
+        assert r1["cds_length"] == r2["cds_length"]
+        # Full-length metrics differ because the folded sequence is longer.
+        assert r1["full_length"] == r2["cds_length"]
+        assert r2["full_length"] == r2["cds_length"] + 12
+
+    def test_empty_context_is_backward_compatible(self):
+        cds = "AUGUUUAAAGGG"
+
+        ev_default = FitnessEvaluator()
+        ev_explicit_empty = FitnessEvaluator(config=FitnessConfig(prefix="", suffix=""))
+
+        r1 = ev_default.evaluate(cds)
+        r2 = ev_explicit_empty.evaluate(cds)
+
+        assert r1["full_length"] == r2["full_length"]
+        assert r1["MFE"] == r2["MFE"]
+        assert r1["avg_MFE"] == r2["avg_MFE"]
+
+    def test_batch_evaluation_with_context(self):
+        cfg = FitnessConfig(prefix="GGGAAA", suffix="UUUCCC")
+        ev = FitnessEvaluator(config=cfg)
+        seqs = ["AUGUUUAAAGGG", "AUGGGGUUUAAA"]
+        results = ev.evaluate_batch(seqs, processes=1)
+        assert len(results) == 2
+        for seq in seqs:
+            assert seq in results
+            assert results[seq]["prefix_length"] == 6
+            assert results[seq]["suffix_length"] == 6
+            assert results[seq]["full_length"] == len(seq) + 12

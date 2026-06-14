@@ -10,7 +10,7 @@ import click
 
 from cdsopt.fitness.evaluator import FitnessConfig, FitnessEvaluator
 from cdsopt.genetic_alg.processor import GAConfig, GeneticAlgorithmProcessor
-from cdsopt.io_utils import read_protein_sequence, read_cds_sequences, write_results
+from cdsopt.io_utils import read_protein_sequence, read_cds_sequences, read_single_sequence, write_results
 from cdsopt.utils.fold_tools import estimate_fold
 from cdsopt.utils.scoring import count_cg
 
@@ -41,6 +41,7 @@ _PARAM_DEFAULTS = {
     "target_avg_mfe": -0.4, "tolerance_avg_mfe": 0.05,
     "target_aup": None, "tolerance_aup": 0.05,
     "target_cpb": None, "tolerance_cpb": 0.01,
+    "prefix": "", "suffix": "",
 }
 
 
@@ -89,6 +90,8 @@ def _build_fitness_config(yaml_cfg: dict, **p) -> FitnessConfig:
         cpb_tolerance=p["tolerance_cpb"],
         target_cg_content=_resolve_target("target_cg", None),
         cg_content_tolerance=p["tolerance_cg"],
+        prefix=p.get("prefix", ""),
+        suffix=p.get("suffix", ""),
     )
 
 
@@ -130,6 +133,8 @@ def app(ctx: click.Context, verbose: bool) -> None:
 @click.option("--tolerance-cpb", type=float, default=0.01, show_default=True)
 @click.option("--init-cds", type=click.Path(exists=True, path_type=Path), default=None, help="FASTA file with initial CDS sequences")
 @click.option("--weighted-init", is_flag=True, help="Generate random initial population weighted by species CAI")
+@click.option("--prefix", type=click.Path(exists=True, path_type=Path), default=None, help="FASTA/plain text with fixed 5' flanking sequence")
+@click.option("--suffix", type=click.Path(exists=True, path_type=Path), default=None, help="FASTA/plain text with fixed 3' flanking sequence")
 def optimize(**kwargs) -> None:
     """Optimize mRNA coding sequence for a given protein.
 
@@ -149,6 +154,12 @@ def optimize(**kwargs) -> None:
     logger.info("Loaded protein sequence: %d residues", len(protein))
 
     params = {k: _resolve(k, d) for k, d in _PARAM_DEFAULTS.items()}
+
+    # Load fixed flanking sequences if provided.
+    if kwargs.get("prefix"):
+        params["prefix"] = read_single_sequence(kwargs["prefix"])
+    if kwargs.get("suffix"):
+        params["suffix"] = read_single_sequence(kwargs["suffix"])
 
     # not_mutate_idx can be a comma-separated string or a list in YAML.
     # Supports:
@@ -268,14 +279,19 @@ def _looks_like_cds(rna_seq: str, genetic_code: int = 1) -> bool:
 @click.option("-s", "--species", default="human", help="Host species for codon usage", show_default=True)
 @click.option("--fold-engine", default="auto", show_default=True, help="RNA folding engine: auto, vienna, or linearfold")
 @click.option("-o", "--output", type=click.Path(path_type=Path), default=None, help="Output file (CSV); default: stdout")
-def report(seq: Path, species: str, fold_engine: str, output: Path | None) -> None:
-    """Evaluate fitness parameters for CDS or full-length mRNA sequences.
+@click.option("--prefix", type=click.Path(exists=True, path_type=Path), default=None, help="Fixed 5' flanking sequence for full-length folding")
+@click.option("--suffix", type=click.Path(exists=True, path_type=Path), default=None, help="Fixed 3' flanking sequence for full-length folding")
+def report(seq: Path, species: str, fold_engine: str, output: Path | None,
+           prefix: Path | None, suffix: Path | None) -> None:
+    """Evaluate CDS sequences, optionally with fixed flanking sequences.
 
-    SEQ: FASTA file containing RNA sequences.  Sequences recognized as CDS
-    (length multiple of 3, valid codons, no internal stop) are analyzed with
-    all metrics (CAI, tAI, CG, MFE, AUP, CPB).  Non-CDS sequences only get
-    structural metrics (MFE, avg_MFE, AUP) and global CG content.
+    SEQ: FASTA file containing RNA sequences.  Each record is treated as a CDS.
+    CAI/tAI/CG/CPB are computed on the CDS, while MFE/avg_MFE/AUP are computed
+    on prefix + CDS + suffix when --prefix/--suffix are provided.
     """
+    prefix_seq = read_single_sequence(prefix) if prefix else ""
+    suffix_seq = read_single_sequence(suffix) if suffix else ""
+
     fitness_config = FitnessConfig(
         species=species,
         fold_engine=fold_engine,
@@ -285,6 +301,8 @@ def report(seq: Path, species: str, fold_engine: str, output: Path | None) -> No
         target_cg_content=0.0,
         target_aup=0.0,
         target_cpb=0.0,
+        prefix=prefix_seq,
+        suffix=suffix_seq,
     )
     evaluator = FitnessEvaluator(config=fitness_config)
 
@@ -292,32 +310,16 @@ def report(seq: Path, species: str, fold_engine: str, output: Path | None) -> No
     records = list(SeqIO.parse(seq, "fasta"))
     logger.info("Loaded %d sequences from %s", len(records), seq)
 
-    rows = []
+    rows: list[dict] = []
     for record in records:
         rna_seq = str(record.seq).upper().replace("T", "U")
-        is_cds = _looks_like_cds(rna_seq)
-
-        if is_cds:
-            fit = evaluator.evaluate(rna_seq)
-        else:
-            # Full-length / UTR sequences: structural metrics only.
-            fd = estimate_fold(rna_seq, engine=evaluator._resolved_fold_engine, need_aup=True)
-            fit = {
-                "rna_seq": rna_seq,
-                "MFE": float(fd["mfe"]),
-                "avg_MFE": float(fd["mfe"]) / len(rna_seq) if len(rna_seq) > 0 else 0.0,
-                "structure": fd["structure"],
-                "AUP": float(fd["aup"]),
-                "CG_content": float(count_cg(rna_seq)),
-                "CAI": "",
-                "tAI": "",
-                "CPB": "",
-            }
-
+        fit = evaluator.evaluate(rna_seq)
         rows.append({
             "id": record.id,
-            "length": len(rna_seq),
-            "is_cds": is_cds,
+            "full_length": fit.get("full_length", ""),
+            "cds_length": fit.get("cds_length", ""),
+            "prefix_length": fit.get("prefix_length", ""),
+            "suffix_length": fit.get("suffix_length", ""),
             "CAI": fit.get("CAI", ""),
             "tAI": fit.get("tAI", ""),
             "CG_content": fit.get("CG_content", ""),
@@ -328,7 +330,10 @@ def report(seq: Path, species: str, fold_engine: str, output: Path | None) -> No
         })
 
     import csv, sys
-    fieldnames = ["id", "length", "is_cds", "CAI", "tAI", "CG_content", "MFE", "avg_MFE", "AUP", "CPB"]
+    fieldnames = [
+        "id", "full_length", "cds_length", "prefix_length", "suffix_length",
+        "CAI", "tAI", "CG_content", "MFE", "avg_MFE", "AUP", "CPB",
+    ]
     fobj = open(output, "w", newline="", encoding="utf-8") if output else sys.stdout
     writer = csv.DictWriter(fobj, fieldnames=fieldnames)
     writer.writeheader()

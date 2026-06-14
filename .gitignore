@@ -220,3 +220,19 @@ __marimo__/
 # Project-specific
 outputs/
 *.bak
+
+# YingXuProject generated results
+YingXuProject/gemorna_results/
+YingXuProject/final_candidates/
+YingXuProject/editing-*_report.csv
+YingXuProject/scripts/*.csv
+YingXuProject/scripts/*.fasta
+
+# cds_project generated reports
+cds_project/**/report.csv
+
+# Submodule runtime artifacts (parent-repo view only; submodule untracked
+# content must still be cleaned inside the submodule itself)
+submodules/**/__pycache__/
+submodules/**/*.pyc
+submodules/**/*.pyo

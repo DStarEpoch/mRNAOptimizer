@@ -217,13 +217,19 @@ class GeneticAlgorithmProcessor:
     def _write_generation_fitness(self, out_path: Path, gen: int) -> None:
         import csv
         csv_path = out_path / f"fitness_gen_{gen:03d}.csv"
-        fieldnames = ["id", "sequence", "length"] + [obj.key for obj in self.objectives]
+        fieldnames = ["id", "sequence", "length", "full_length"] + [obj.key for obj in self.objectives]
+        has_context = self.cfg.fitness_config.prefix or self.cfg.fitness_config.suffix
         with open(csv_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for i, (ind, fit) in enumerate(zip(self.population, self.fitness_list)):
-                row = {"id": f"seq_{i}", "sequence": self.spec.to_rna(ind), "length": len(self.spec.to_rna(ind))}
-                row.update({k: fit.get(k, "") for k in fieldnames[3:]})
+                cds = self.spec.to_rna(ind)
+                row = {"id": f"seq_{i}", "sequence": cds, "length": len(cds)}
+                if has_context:
+                    row["full_length"] = fit.get("full_length", len(cds))
+                else:
+                    row["full_length"] = len(cds)
+                row.update({k: fit.get(k, "") for k in fieldnames[4:]})
                 writer.writerow(row)
         logger.info("Generation %d fitness written to %s", gen, csv_path)
 

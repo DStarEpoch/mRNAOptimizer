@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Multi-objective fitness evaluator."""
+"""Multi-objective fitness evaluator with optional fixed flanking sequences."""
 from __future__ import annotations
 
 import logging
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from multiprocessing import Pool
 from typing import Dict, List, Optional
 
@@ -37,13 +37,21 @@ class FitnessConfig:
     cpb_tolerance: float = 0.01
     fold_engine: str = "auto"
     cache_maxsize: int = 100_000
+    # Fixed flanking sequences. When both are empty (default), the evaluator
+    # folds and evaluates only the CDS. Otherwise the full molecule is
+    # prefix + CDS + suffix, while codon-level metrics are still computed on
+    # the CDS alone.
+    prefix: str = ""
+    suffix: str = ""
+
+
+def _norm_rna(seq: str) -> str:
+    return seq.upper().replace("T", "U")
 
 
 def build_objectives(cfg: FitnessConfig) -> List[Objective]:
     objs: List[Objective] = []
-    # CAI is always enabled
     objs.append(Objective("CAI", target=cfg.target_cai, tolerance=cfg.cai_tolerance))
-    # avg_MFE is always enabled
     objs.append(Objective("avg_MFE", target=cfg.target_avg_mfe, tolerance=cfg.avg_mfe_tolerance))
     if cfg.target_tai is not None:
         objs.append(Objective("tAI", target=cfg.target_tai, tolerance=cfg.tai_tolerance))
@@ -75,7 +83,11 @@ class FitnessEvaluator:
             for c, f in zip(codons, freqs):
                 self._cai_weights[c] = f / max_freq if max_freq > 0 else 0.0
 
-        logger.debug("FitnessEvaluator ready (species=%s, engine=%s, objectives=%s)", self.cfg.species, self._resolved_fold_engine, self._active_objectives())
+        self._prefix = _norm_rna(self.cfg.prefix)
+        self._suffix = _norm_rna(self.cfg.suffix)
+        self._has_context = bool(self._prefix or self._suffix)
+
+        logger.debug("FitnessEvaluator ready (species=%s, engine=%s, context=%s, objectives=%s)", self.cfg.species, self._resolved_fold_engine, self._has_context, self._active_objectives())
 
     def _active_objectives(self) -> List[str]:
         objs = ["CAI", "avg_MFE"]
@@ -89,40 +101,60 @@ class FitnessEvaluator:
             objs.append("CPB")
         return objs
 
+    def _cache_key(self, cds_seq: str) -> str:
+        if not self._has_context:
+            return cds_seq
+        return f"{cds_seq}|{self._prefix}|{self._suffix}"
+
     def evaluate(self, rna_seq: str) -> dict:
-        cached = self.cache.get(rna_seq)
+        """Evaluate a CDS sequence.
+
+        If fixed flanking sequences were configured, MFE/avg_MFE/AUP/structure
+        are computed on prefix + CDS + suffix, while CAI/tAI/CG/CPB remain
+        CDS-only metrics.
+        """
+        cds_seq = _norm_rna(rna_seq)
+        cache_key = self._cache_key(cds_seq)
+        cached = self.cache.get(cache_key)
         if cached is not None:
             return cached
 
-        result: dict = {"rna_seq": rna_seq}
-        _run = lambda fn, key, default: self._try_evaluate(fn, key, default, result, rna_seq)
+        result: dict = {"rna_seq": cds_seq}
+        _run = lambda fn, key, default: self._try_evaluate(fn, key, default, result, cds_seq)
 
-        # CAI is always evaluated
-        _run(lambda: float(_calc_cai(rna_seq, weights=self._cai_weights)), "CAI", 0.0)
-        # tAI
+        # CDS-only metrics.
+        _run(lambda: float(_calc_cai(cds_seq, weights=self._cai_weights)), "CAI", 0.0)
         if self.cfg.target_tai is not None:
-            _run(lambda: float(_calc_tai(rna_seq, genetic_code=self.cfg.genetic_code, species=self.cfg.species)), "tAI", 0.0)
-        # CG
+            _run(lambda: float(_calc_tai(cds_seq, genetic_code=self.cfg.genetic_code, species=self.cfg.species)), "tAI", 0.0)
         if self.cfg.target_cg_content is not None:
-            _run(lambda: float(_count_cg(rna_seq)), "CG_content", 0.0)
-        # Fold (avg_MFE always; AUP only if target is set)
+            _run(lambda: float(_count_cg(cds_seq)), "CG_content", 0.0)
+        if self.cfg.target_cpb is not None:
+            _run(lambda: float(_calc_cpb(cds_seq, species=self.cfg.species, genetic_code=self.cfg.genetic_code)), "CPB", 0.0)
+
+        # Folding: full molecule if context is set, otherwise CDS alone.
+        full_seq = (self._prefix + cds_seq + self._suffix) if self._has_context else cds_seq
         need_aup = self.cfg.target_aup is not None
+
         def _fold():
-            fd = _estimate_fold(rna_seq, engine=self._resolved_fold_engine, need_aup=need_aup)
+            fd = _estimate_fold(full_seq, engine=self._resolved_fold_engine, need_aup=need_aup)
             result["MFE"] = float(fd["mfe"])
-            result["avg_MFE"] = result["MFE"] / len(rna_seq) if len(rna_seq) > 0 else 0.0
+            result["avg_MFE"] = result["MFE"] / len(full_seq) if len(full_seq) > 0 else 0.0
             result["structure"] = fd["structure"]
             if need_aup:
                 result["AUP"] = float(fd["aup"])
-        fail_vals = {"MFE": 0.0, "avg_MFE": 0.0, "structure": "." * len(rna_seq)}
+
+        fail_vals = {"MFE": 0.0, "avg_MFE": 0.0, "structure": "." * len(full_seq)}
         if need_aup:
             fail_vals["AUP"] = 0.0
-        self._try_evaluate(_fold, "fold", None, result, rna_seq, on_fail=lambda: result.update(fail_vals))
-        # CPB
-        if self.cfg.target_cpb is not None:
-            _run(lambda: float(_calc_cpb(rna_seq, species=self.cfg.species, genetic_code=self.cfg.genetic_code)), "CPB", 0.0)
+        self._try_evaluate(_fold, "fold", None, result, cds_seq, on_fail=lambda: result.update(fail_vals))
 
-        self.cache.set(rna_seq, result)
+        # Length annotations for reporting.
+        result["full_length"] = len(full_seq)
+        result["cds_length"] = len(cds_seq)
+        result["prefix_length"] = len(self._prefix)
+        result["suffix_length"] = len(self._suffix)
+
+        self.cache.set(cache_key, result)
         return result
 
     def _try_evaluate(self, fn, key, default, result, rna_seq, on_fail=None):
@@ -142,7 +174,7 @@ class FitnessEvaluator:
             return {seq: self.evaluate(seq) for seq in rna_seqs}
         to_eval, results = [], {}
         for seq in rna_seqs:
-            cached = self.cache.get(seq)
+            cached = self.cache.get(self._cache_key(_norm_rna(seq)))
             if cached is not None:
                 results[seq] = cached
             else:
@@ -154,13 +186,13 @@ class FitnessEvaluator:
             "target_cai", "cai_tolerance", "target_avg_mfe", "avg_mfe_tolerance",
             "target_tai", "tai_tolerance", "target_cg_content", "cg_content_tolerance",
             "target_aup", "aup_tolerance", "target_cpb", "cpb_tolerance",
-            "fold_engine",
+            "fold_engine", "prefix", "suffix",
         )}
         with Pool(processes=processes) as pool:
             mapped = pool.map(_eval_worker, [(seq, cfg_dict) for seq in to_eval])
         for seq, fit in mapped:
             results[seq] = fit
-            self.cache.set(seq, fit)
+            self.cache.set(self._cache_key(_norm_rna(seq)), fit)
         return results
 
 

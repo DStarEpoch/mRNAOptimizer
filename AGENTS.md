@@ -8,7 +8,7 @@
 
 - **Entry point**: `python -m cdsopt` (click CLI with optimize / resume / report)
 - **Test runner**: `python run_tests.py -v`
-- **Python**: >= 3.13
+- **Python**: >= 3.10 (tested mainly on 3.10 for GEMORNA compatibility)
 - **Package layout**: `cdsopt/` is a flat package under `mRNAOptimizer/`
 
 ## Architecture
@@ -144,15 +144,17 @@ utropt/
 
 | Module | Status | Notes |
 |--------|--------|-------|
-| `utropt/__init__.py` | ✅ | Package marker |
+| `utropt/__init__.py` | ✅ | Exposes public API: `UTREvaluator`, `UTRConfig`, `UTRRecommender`, `predict_5utr`, `predict_3utr`, generators |
 | `utropt/utils.py` | ✅ | RNA sequence utilities, motif scanning helpers |
 | `utropt/gemorna_adapter.py` | ✅ | Direct import wrapper for GEMORNA 5'/3' UTR predictors; verified on Python 3.13 |
+| `utropt/gemorna_generator.py` | ✅ | Thin wrapper around GEMORNA's official CLI (`generate_5utr_candidates`, `generate_3utr_candidates`). Linux/WSL only. CDS generation excluded; use `cdsopt`.
 | `utropt/mirna_seeds.py` | ✅ | Built-in human miRNA seed DB + TargetScan/miRBase parsers |
 | `utropt/rbp_motifs.py` | ✅ | ATtRACT parser and RBP motif scanner |
 | `utropt/evaluator.py` | ✅ | 5'/3'/full-mRNA evaluator with Kozak, uORF, MFE, ARE, PAS, miRNA, RBP, GEMORNA scores |
+| `utropt/recommender.py` | ✅ | **New** `UTRRecommender`: generate UTR combinations for a fixed CDS, score with `UTREvaluator`, rank by composite objective, write FASTA + CSV report. CDS optimization intentionally excluded; use `cdsopt`. |
 | `utropt/library.py` | ⏳ | Curated UTR part library (Kozak, β-globin, bGH pA, SV40 pA, etc.) |
-| `utropt/assembler.py` | ⏳ | Full-mRNA assembler preserving polyA |
-| `utropt/designer.py` | ⏳ | Rule-based + GEMORNA-based candidate generation |
+| `utropt/assembler.py` | ⏳ | Full-mRNA assembler preserving polyA (functionality currently folded into `recommender.py`) |
+| `utropt/designer.py` | ⏳ | Rule-based + GEMORNA-based candidate generation (functionality currently folded into `recommender.py`) |
 | `utropt/cli.py` | ⏳ | `evaluate` / `design` / `score` commands |
 | `utropt/tests/` | ⏳ | pytest suite |
 
@@ -170,12 +172,16 @@ utropt/
 
 For each of the two YingXuProject mRNAs, generate candidates for:
 
-| Group | 5' UTR | CDS | 3' UTR |
-|------|--------|-----|--------|
-| G1 | Original | Original | Original |
-| G2 | Original | Optimized | Original |
-| G3 | Replacement / GEMORNA | Original | Replacement / GEMORNA |
-| G4 | Replacement / GEMORNA | Optimized | Replacement / GEMORNA |
+| Group | 5' UTR | CDS | 3' UTR | Notes |
+|------|--------|-----|--------|-------|
+| G1 (baseline) | Original | Original | Original | Single sequence, evaluated for comparison |
+| G2 | GEMORNA | Original | GEMORNA | Optimized UTR only (utropt scope) |
+
+Implemented in `YingXuProject/run_utropt_gemorna.py` using `utropt.UTRRecommender`.
+UTR lengths: 5'UTR generated in both `short` and `medium`; 3'UTR generated as `long`.
+Each group recommends top 3, yielding 2 mRNAs × 2 groups × 3 = 12 candidate sequences (G1 contributes 1 baseline).
+
+CDS optimization is handled by `cdsopt`, not utropt.
 
 ## Current State
 
@@ -186,6 +192,7 @@ For each of the two YingXuProject mRNAs, generate candidates for:
 - **CPB reference sequences**: Real ACTB reference sequence from NCBI replaces synthetic random references.
 - **Result outputs**: `pareto_front.fasta`, `fitness.csv`, `summary.json`, plus per-generation `fitness_gen_{gen:03d}.csv`.
 - **LinearFold Windows build**: Compiled `linearfold_v.exe` / `linearfold_c.exe` with MinGW; `cdsopt` auto-detects via `linearfold.bat` wrapper.
+- **Python 3.10 compatibility**: `pyproject.toml` now requires `>=3.10` and pins GEMORNA-compatible dependency versions (torch==2.2.0, numpy==1.26.4, pandas==2.0.2, biopython>=1.72). Windows development can still use Python 3.13, but GEMORNA generation must run under Python 3.10 (e.g. WSL conda env).
 - **LinearFold submodule migration**: Switched to `DStarEpoch/LinearFork` fork with Windows MinGW support; submodule pointer updated and pushed.
 - **`report` command extended**: Can now analyze full-length mRNA sequences; non-CDS sequences only receive structural metrics.
 - **`utropt/` evaluation module implemented**: `UTREvaluator` supports 5'UTR (Kozak, uORF, MFE, GEMORNA TIE), 3'UTR (PAS, ARE, miRNA, RBP, MFE, GEMORNA stability), and full-mRNA metrics. Verified on RNA editing-1 5'UTR.
@@ -213,11 +220,12 @@ For each of the two YingXuProject mRNAs, generate candidates for:
     - GEMORNA 5'/3' UTR prediction integration
     - Full-mRNA structural evaluation
 13. **Complete `utropt/` design workflow**
+    - ~~Implement GEMORNA generation wrapper~~ ✅ (`utropt/gemorna_generator.py`)
+    - ~~Implement candidate combination + scoring + recommendation~~ ✅ (`utropt/recommender.py`)
     - Implement `library.py` with curated 5'/3' UTR parts
-    - Implement `assembler.py` with polyA preservation
-    - Implement `designer.py` for rule-based + GEMORNA candidate generation
+    - Implement standalone `assembler.py` / `designer.py` (currently folded into `recommender.py`)
     - Implement `cli.py` with `evaluate` / `design` / `score` commands
-    - Validate full 6-group design matrix on RNA editing-1 / RNA editing-2
+    - Validate full 4-group design matrix on RNA editing-1 / RNA editing-2
 
 ### Medium Priority
 14. **Address population homogenization**
