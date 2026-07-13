@@ -6,8 +6,44 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 from ViennaRNA import RNA
+
+
+def _find_linearfold_executable() -> str | None:
+    """Locate a LinearFold executable.
+
+    Search order:
+      1. ``linearfold`` on PATH (common on Linux/macOS).
+      2. ``linearfold_v`` / ``linearfold_v.exe`` on PATH.
+      3. Bundled Windows binary next to this file:
+         ``mRNAOptimizer/submodules/LinearFold/bin/linearfold_v.exe``.
+      4. Bundled ``linearfold.exe`` in the same directory.
+    """
+    for name in ("linearfold", "linearfold_v", "linearfold_v.exe"):
+        exe = shutil.which(name)
+        if exe:
+            return exe
+
+    # Fallback to bundled binary relative to this module.
+    # This file lives in mRNAOptimizer/cdsopt/utils/fold_tools.py.
+    bundled = (
+        Path(__file__).resolve().parents[2]
+        / "submodules"
+        / "LinearFold"
+        / "bin"
+        / "linearfold_v.exe"
+    )
+    if bundled.exists():
+        return str(bundled)
+
+    bundled_alt = bundled.with_name("linearfold.exe")
+    if bundled_alt.exists():
+        return str(bundled_alt)
+
+    return None
 
 
 def _fold_vienna(sequence: str, need_aup: bool = True) -> dict:
@@ -30,17 +66,27 @@ def _compute_aup_from_structure(structure: str) -> float:
 
 def _fold_linearfold(sequence: str, need_aup: bool = True) -> dict:
     """Fold with LinearFold CLI; AUP from dot-counting."""
-    executable = shutil.which("linearfold")
+    executable = _find_linearfold_executable()
     if executable is None:
-        raise FileNotFoundError("linearfold not found in PATH")
+        raise FileNotFoundError("linearfold not found in PATH or bundled location")
 
-    # Use input= instead of echo pipe for Windows compatibility.
-    result = subprocess.run(
-        [executable, "-V"],
-        input=sequence + "\n",
-        capture_output=True,
-        text=True,
-    )
+    # The Windows build of linearfold_v.exe reads stdin and prints:
+    #   STRUCTURE  (MFE)
+    # e.g.  (((...)))  (-1.20)
+    if sys.platform == "win32":
+        result = subprocess.run(
+            [executable],
+            input=sequence + "\n",
+            capture_output=True,
+            text=True,
+        )
+    else:
+        result = subprocess.run(
+            [executable, "-V"],
+            input=sequence + "\n",
+            capture_output=True,
+            text=True,
+        )
 
     if result.returncode != 0:
         raise RuntimeError(
@@ -77,14 +123,12 @@ def estimate_fold(sequence: str, engine: str = "auto", need_aup: bool = True) ->
     :return: dict with keys 'mfe', 'structure', 'aup'.
     """
     if engine == "linearfold":
-        if not shutil.which("linearfold"):
-            raise FileNotFoundError("linearfold not found in PATH")
         return _fold_linearfold(sequence, need_aup=need_aup)
 
     if engine == "vienna":
         return _fold_vienna(sequence, need_aup=need_aup)
 
-    # auto-detect
-    if shutil.which("linearfold"):
+    # auto-detect: prefer LinearFold if available
+    if _find_linearfold_executable():
         return _fold_linearfold(sequence, need_aup=need_aup)
     return _fold_vienna(sequence, need_aup=need_aup)

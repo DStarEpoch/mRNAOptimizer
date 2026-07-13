@@ -165,7 +165,7 @@ class GeneticAlgorithmProcessor:
         mute_rate = self.operators.adaptive_mute_rate(self.population)
         children: List[Individual] = []
         existing = set(self.population)
-        diversity_limit_reached = len(existing) >= 0.5 * self.spec.total_variants
+        diversity_limit_reached = len(existing) * 2 >= self.spec.total_variants
         attempts = 0
         skipped = 0
         while len(children) < n_children:
