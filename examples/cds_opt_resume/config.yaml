@@ -1,0 +1,35 @@
+# Short optimization run to demonstrate resuming from a checkpoint.
+# Run this first, then use cdsopt resume with the generated checkpoint.pkl.
+
+pop_size: 30
+generations: 10
+amplification: 3
+processes: 5
+seed: 42
+n_elite: 3
+
+output_dir: "./outputs"
+
+target_cai: 0.92
+tolerance_cai: 0.02
+target_avg_mfe: -0.38
+tolerance_avg_mfe: 0.05
+target_cg: 0.55
+tolerance_cg: 0.03
+target_aup: 0.35
+tolerance_aup: 0.05
+target_tai: 0.40
+tolerance_tai: 0.05
+target_cpb: 0.0
+tolerance_cpb: 0.05
+
+mute_rate: 0.05
+weighted_init: true
+
+forbidden_motifs:
+  enzymes:
+    - BspQ1
+    - BsaI
+  polyt_min_len: 6
+  polya_signals: true
+  homopolymer_min_len: 6

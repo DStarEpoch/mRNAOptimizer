@@ -173,6 +173,25 @@ class TestOptimizeCommand:
         exc_msg = str(result.exception).lower() if result.exception else ""
         assert "match the protein" in exc_msg or "not a valid synonymous codon" in exc_msg
 
+    def test_yaml_forbidden_motifs(self, runner: CliRunner, protein_txt: Path, tmp_path: Path):
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            "pop_size: 4\ngenerations: 1\nforbidden_motifs:\n  enzymes:\n    - BspQ1\n  polyt_min_len: 6\n",
+            encoding="utf-8",
+        )
+        out_dir = tmp_path / "out"
+        result = runner.invoke(
+            app,
+            [
+                "optimize",
+                str(protein_txt),
+                "--config", str(config),
+                "--output-dir", str(out_dir),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert (out_dir / "pareto_front.fasta").exists()
+
 
 class TestResumeCommand:
     def test_resume_from_checkpoint(self, runner: CliRunner, protein_txt: Path, tmp_path: Path):

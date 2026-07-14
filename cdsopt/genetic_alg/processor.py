@@ -17,6 +17,7 @@ from cdsopt.fitness.evaluator import FitnessConfig, FitnessEvaluator
 from cdsopt.genetic_alg.individual import Individual, ProteinSpec
 from cdsopt.genetic_alg.nsga2 import Objective, environmental_selection, fast_non_dominated_sort, _count_satisfied
 from cdsopt.genetic_alg.operators import GeneticOperators
+from cdsopt.utils.motif_filter import ForbiddenMotifConfig, scan_forbidden_motifs, repair_individual
 
 logger = logging.getLogger(__name__)
 CHECKPOINT_VERSION = "1.0"
@@ -73,6 +74,9 @@ class GeneticAlgorithmProcessor:
         if self.cfg.processes > 1:
             self._pool = Pool(processes=self.cfg.processes)
         self._fixed_ref: Individual | None = None
+        self._has_motif_constraint = bool(self.cfg.fitness_config.forbidden_motifs.build_motif_dict()) or \
+            self.cfg.fitness_config.forbidden_motifs.polyt_min_len or \
+            self.cfg.fitness_config.forbidden_motifs.homopolymer_min_len
         self._initialize_population(init_cds_list)
 
     def _initialize_population(self, init_cds_list: List[str] | None) -> None:
@@ -99,10 +103,39 @@ class GeneticAlgorithmProcessor:
                     self.rng, weighted=self.cfg.weighted_init,
                     reference=self._fixed_ref, fixed_idx=self.cfg.not_mutate_idx
                 ))
+        if self._has_motif_constraint:
+            self._repair_population_motifs()
         logger.info("Evaluating initial population of %d individuals...", len(self.population))
         self._evaluate()
         init_unique = len(set(self.population))
         logger.info("Initial population evaluation complete. unique=%d, duplicates=%d", init_unique, len(self.population) - init_unique)
+
+    def _repair_population_motifs(self) -> None:
+        """Repair forbidden motifs in the initial population."""
+        if not self._has_motif_constraint:
+            return
+        cfg = self.cfg.fitness_config.forbidden_motifs
+        repaired = []
+        for ind in self.population:
+            seq = self.spec.to_rna(ind)
+            if scan_forbidden_motifs(seq, cfg):
+                new_indices = repair_individual(ind.indices, self.spec, cfg, self.rng)
+                if new_indices is not None:
+                    repaired.append(Individual(new_indices))
+                else:
+                    # Replace with a random repaired individual.
+                    for _ in range(100):
+                        new_ind = self.spec.random_individual(rng=self.rng, weighted=self.cfg.weighted_init)
+                        new_indices = repair_individual(new_ind.indices, self.spec, cfg, self.rng)
+                        if new_indices is not None:
+                            repaired.append(Individual(new_indices))
+                            break
+                    else:
+                        repaired.append(ind)
+            else:
+                repaired.append(ind)
+        self.population = repaired
+        logger.info("Repaired forbidden motifs in initial population")
 
     def run(self, output_dir: str | Path = "./outputs") -> None:
         out_path = Path(output_dir)
@@ -154,6 +187,15 @@ class GeneticAlgorithmProcessor:
                 rng=self.rng, weighted=self.cfg.weighted_init,
                 reference=self._fixed_ref, fixed_idx=self.cfg.not_mutate_idx
             )
+            if self._has_motif_constraint:
+                new_seq = self.spec.to_rna(new_ind)
+                if scan_forbidden_motifs(new_seq, self.cfg.fitness_config.forbidden_motifs):
+                    repaired_indices = repair_individual(
+                        new_ind.indices, self.spec, self.cfg.fitness_config.forbidden_motifs, self.rng
+                    )
+                    if repaired_indices is None:
+                        continue
+                    new_ind = Individual(repaired_indices)
             unique_pop.append(new_ind)
             unique_fitness.append(self.evaluator.evaluate(self.spec.to_rna(new_ind)))
         self.population = unique_pop
@@ -168,6 +210,7 @@ class GeneticAlgorithmProcessor:
         diversity_limit_reached = len(existing) * 2 >= self.spec.total_variants
         attempts = 0
         skipped = 0
+        rejected_motif = 0
         while len(children) < n_children:
             attempts += 1
             p1 = self.rng.choice(self.population)
@@ -177,11 +220,24 @@ class GeneticAlgorithmProcessor:
             if not diversity_limit_reached and child in existing:
                 skipped += 1
                 continue
+            if self._has_motif_constraint:
+                child_seq = self.spec.to_rna(child)
+                if scan_forbidden_motifs(child_seq, self.cfg.fitness_config.forbidden_motifs):
+                    repaired_indices = repair_individual(
+                        child.indices, self.spec, self.cfg.fitness_config.forbidden_motifs, self.rng
+                    )
+                    if repaired_indices is None:
+                        rejected_motif += 1
+                        continue
+                    child = Individual(repaired_indices)
+                    if not diversity_limit_reached and child in existing:
+                        skipped += 1
+                        continue
             children.append(child)
             existing.add(child)
         children_unique = len(set(children))
-        logger.debug("Gen %d reproduce: attempts=%d, skipped=%d, children=%d, children_unique=%d, mute_rate=%.4f, diversity_limit=%s",
-                     self.generation, attempts, skipped, len(children), children_unique, mute_rate, diversity_limit_reached)
+        logger.debug("Gen %d reproduce: attempts=%d, skipped=%d, rejected_motif=%d, children=%d, children_unique=%d, mute_rate=%.4f, diversity_limit=%s",
+                     self.generation, attempts, skipped, rejected_motif, len(children), children_unique, mute_rate, diversity_limit_reached)
         return children
 
     def _evaluate(self) -> None:
@@ -272,6 +328,9 @@ class GeneticAlgorithmProcessor:
         instance.generation = data["generation"]
         fixed_ref_indices = data.get("fixed_ref")
         instance._fixed_ref = Individual(fixed_ref_indices) if fixed_ref_indices is not None else None
+        instance._has_motif_constraint = bool(cfg.fitness_config.forbidden_motifs.build_motif_dict()) or \
+            cfg.fitness_config.forbidden_motifs.polyt_min_len or \
+            cfg.fitness_config.forbidden_motifs.homopolymer_min_len
 
         instance._pool = None
         if cfg.processes > 1:

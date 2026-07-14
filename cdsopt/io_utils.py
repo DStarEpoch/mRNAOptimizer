@@ -107,7 +107,7 @@ def write_results(processor, output_dir: Path, prefix: str = "") -> None:
             full_sequences.append(full_seq)
             row["full_sequence"] = full_seq
             row["full_length"] = len(full_seq)
-        row.update({k: fit.get(k) for k in fit if k not in ("rna_seq", "sequence")})
+        row.update({k: fit.get(k) for k in fit if k not in ("rna_seq", "sequence", "motif_counts")})
         rows.append(row)
 
     write_fasta(sequences, descriptions, output_dir / f"{prefix}pareto_front.fasta")

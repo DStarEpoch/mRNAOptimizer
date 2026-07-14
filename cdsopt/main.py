@@ -12,6 +12,7 @@ from cdsopt.fitness.evaluator import FitnessConfig, FitnessEvaluator
 from cdsopt.genetic_alg.processor import GAConfig, GeneticAlgorithmProcessor
 from cdsopt.io_utils import read_protein_sequence, read_cds_sequences, read_single_sequence, write_results
 from cdsopt.utils.fold_tools import estimate_fold
+from cdsopt.utils.motif_filter import ForbiddenMotifConfig, RESTRICTION_ENZYMES
 from cdsopt.utils.scoring import count_cg
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ _PARAM_DEFAULTS = {
     "target_aup": None, "tolerance_aup": 0.05,
     "target_cpb": None, "tolerance_cpb": 0.01,
     "prefix": "", "suffix": "",
+    "forbidden_motifs": None,
 }
 
 
@@ -92,6 +94,7 @@ def _build_fitness_config(yaml_cfg: dict, **p) -> FitnessConfig:
         cg_content_tolerance=p["tolerance_cg"],
         prefix=p.get("prefix", ""),
         suffix=p.get("suffix", ""),
+        forbidden_motifs=p.get("forbidden_motifs") or ForbiddenMotifConfig(),
     )
 
 
@@ -154,6 +157,13 @@ def optimize(**kwargs) -> None:
     logger.info("Loaded protein sequence: %d residues", len(protein))
 
     params = {k: _resolve(k, d) for k, d in _PARAM_DEFAULTS.items()}
+
+    # Load forbidden motif config from YAML if present.
+    fm_cfg = yaml_cfg.get("forbidden_motifs")
+    if isinstance(fm_cfg, dict):
+        params["forbidden_motifs"] = ForbiddenMotifConfig(**fm_cfg)
+    elif isinstance(fm_cfg, ForbiddenMotifConfig):
+        params["forbidden_motifs"] = fm_cfg
 
     # Load fixed flanking sequences if provided.
     if kwargs.get("prefix"):
@@ -292,6 +302,14 @@ def report(seq: Path, species: str, fold_engine: str, output: Path | None,
     prefix_seq = read_single_sequence(prefix) if prefix else ""
     suffix_seq = read_single_sequence(suffix) if suffix else ""
 
+    # Report command scans all known motifs by default.
+    report_motif_config = ForbiddenMotifConfig(
+        enzymes=list(RESTRICTION_ENZYMES.keys()),
+        polyt_min_len=6,
+        polya_signals=True,
+        homopolymer_min_len=6,
+        include_other_motifs=True,
+    )
     fitness_config = FitnessConfig(
         species=species,
         fold_engine=fold_engine,
@@ -303,6 +321,7 @@ def report(seq: Path, species: str, fold_engine: str, output: Path | None,
         target_cpb=0.0,
         prefix=prefix_seq,
         suffix=suffix_seq,
+        forbidden_motifs=report_motif_config,
     )
     evaluator = FitnessEvaluator(config=fitness_config)
 
@@ -327,12 +346,13 @@ def report(seq: Path, species: str, fold_engine: str, output: Path | None,
             "avg_MFE": fit.get("avg_MFE", ""),
             "AUP": fit.get("AUP", ""),
             "CPB": fit.get("CPB", ""),
+            "motif": fit.get("motif", ""),
         })
 
     import csv, sys
     fieldnames = [
         "id", "full_length", "cds_length", "prefix_length", "suffix_length",
-        "CAI", "tAI", "CG_content", "MFE", "avg_MFE", "AUP", "CPB",
+        "CAI", "tAI", "CG_content", "MFE", "avg_MFE", "AUP", "CPB", "motif",
     ]
     fobj = open(output, "w", newline="", encoding="utf-8") if output else sys.stdout
     writer = csv.DictWriter(fobj, fieldnames=fieldnames)

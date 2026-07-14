@@ -12,6 +12,7 @@ from cdsopt.fitness.cache import FitnessCache
 from cdsopt.genetic_alg.nsga2 import Objective
 from cdsopt.utils.codon_pair_bias import calc_cpb as _calc_cpb
 from cdsopt.utils.fold_tools import estimate_fold as _estimate_fold
+from cdsopt.utils.motif_filter import ForbiddenMotifConfig, scan_forbidden_motifs, summarize_hits, format_motif_counts
 from cdsopt.utils.scoring import calc_cai as _calc_cai, calc_tai as _calc_tai, count_cg as _count_cg
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class FitnessConfig:
     # the CDS alone.
     prefix: str = ""
     suffix: str = ""
+    forbidden_motifs: ForbiddenMotifConfig = field(default_factory=ForbiddenMotifConfig)
 
 
 def _norm_rna(seq: str) -> str:
@@ -153,6 +155,12 @@ class FitnessEvaluator:
         result["cds_length"] = len(cds_seq)
         result["prefix_length"] = len(self._prefix)
         result["suffix_length"] = len(self._suffix)
+
+        # Forbidden motif scan
+        motif_hits = scan_forbidden_motifs(cds_seq, self.cfg.forbidden_motifs)
+        motif_counts = summarize_hits(motif_hits)
+        result["motif_counts"] = motif_counts
+        result["motif"] = format_motif_counts(motif_counts)
 
         self.cache.set(cache_key, result)
         return result

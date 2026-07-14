@@ -1,0 +1,47 @@
+# Example cdsopt optimize configuration
+# This config targets a small vaccine antigen fragment (46 aa).
+# For a full-scale mRNA vaccine design, increase pop_size and generations
+# and adjust targets based on your experimental constraints.
+
+pop_size: 50
+generations: 30
+amplification: 3
+processes: 4          # use more CPU cores for large proteins
+seed: 42
+n_elite: 5
+
+output_dir: "./outputs"
+
+# Optimization targets (see cdsopt --help for details)
+target_cai: 0.92
+tolerance_cai: 0.02
+target_avg_mfe: -0.38
+tolerance_avg_mfe: 0.05
+target_cg: 0.55
+tolerance_cg: 0.03
+target_aup: 0.35
+tolerance_aup: 0.05
+target_tai: 0.40
+tolerance_tai: 0.05
+target_cpb: 0.0
+tolerance_cpb: 0.05
+
+mute_rate: 0.05
+weighted_init: true
+init_cds: "./init_cds.fa"
+
+# Forbidden motif filtering (new feature)
+# Removes restriction sites, polyT runs, polyA signals and homopolymers
+# from the optimized CDS.
+forbidden_motifs:
+  enzymes:
+    - BspQ1
+    - BsaI
+    - BsmBI
+  motifs:
+    - GCTCTTC
+    - AATAAA
+  polyt_min_len: 6
+  polya_signals: true
+  homopolymer_min_len: 6
+  include_other_motifs: true
